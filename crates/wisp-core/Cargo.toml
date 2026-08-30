@@ -1,0 +1,28 @@
+[package]
+name = "wisp-core"
+description = "Agent runtime: context compaction, system-prompt assembly, the agent loop, and markdown memory."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+futures-util = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+glob = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-tools = { workspace = true }
+wisp-skills = { workspace = true }
+
+[dev-dependencies]
+# test-util enables tokio::time::pause so retry-backoff tests skip real sleeps.
+tokio = { workspace = true, features = ["test-util"] }

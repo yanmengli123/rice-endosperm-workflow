@@ -1,0 +1,68 @@
+schema: wisp.agent-eval-suite.v1
+id: wisp-live-compaction-v1
+description: Cross-model benchmark for a realistic, tool-driven scientific workflow across context compaction.
+defaults:
+  max_context_tokens: 16000
+  max_rounds: 12
+  timeout_ms: 180000
+  max_tool_calls: 30
+  max_tool_errors: 0
+
+cases:
+  - id: longitudinal-study-handoff
+    description: Continue a multi-turn study analysis after discovery, computation, revision, and semantic compaction.
+    tags: [compaction, continuity, scientific-workflow, tools]
+    prompt: Run the longitudinal study handoff workflow.
+    auto_compact: false
+    allowed_tools: [search, read, python, write, edit, attempt_completion]
+    files:
+      study/README.md: |
+        # Cytokine response pilot
+        Compare treatment arms A and B using the day-14 response values in data.csv.
+        The decision memo must follow protocol.md and record exclusions explicitly.
+      study/protocol.md: |
+        Primary endpoint: day-14 response.
+        A subject is a responder when response >= 0.75.
+        S-006 is excluded because the collection failed QC.
+        Advance the arm with the larger responder count; ties are unresolved.
+        The required next step after an advance decision is REPLICATION.
+      study/data.csv: |
+        subject,arm,day14_response,qc
+        S-001,A,0.72,pass
+        S-002,A,0.81,pass
+        S-003,A,0.77,pass
+        S-004,B,0.83,pass
+        S-005,B,0.91,pass
+        S-006,B,0.99,fail
+        S-007,B,0.79,pass
+    context_seed:
+      - role: user
+        repeat: 60
+        content: "Research notebook background: this pilot studies a cytokine response across treatment arms A and B. Earlier exploratory notes discuss assay setup, recruitment, batch normalization, and replication planning; they are supporting context, not the authoritative endpoint rule. "
+      - role: assistant
+        repeat: 60
+        content: "Notebook acknowledged. I will distinguish exploratory discussion from the authoritative protocol, ground calculations in project files, record exclusions, and preserve an auditable decision trail. "
+      - role: user
+        repeat: 60
+        content: "Operational history: samples moved through accession, QC, normalization, and blinded review. Many intermediate observations were provisional. The checked-in protocol and latest explicit correction govern the final handoff. "
+      - role: assistant
+        repeat: 60
+        content: "Operational history retained. I will use tools for discovery and computation, avoid treating provisional notes as final decisions, and carry completed work plus the next action across any context compaction. "
+    actions:
+      - kind: send
+        prompt: "Discover the files under study/, read README.md, protocol.md, and data.csv, then call attempt_completion with DISCOVERY_COMPLETE and a concise account of the endpoint, threshold, exclusion, and next-step rule. Do not modify files yet."
+      - kind: send
+        prompt: "Use the python tool with only the standard library to compute valid responder counts by arm from study/data.csv. Then write artifacts/analysis.md containing the counts, the excluded subject, threshold, provisional decision, and next step. Call attempt_completion with ANALYSIS_COMPLETE."
+      - kind: send
+        prompt: "Audit artifacts/analysis.md against study/protocol.md. Treat this as the authoritative correction superseding the checked-in draft: threshold is 0.80, S-006 is excluded, the decision is ADVANCE-ARM-B, and the next step is REPLICATION. Use edit to make the artifact contain those exact decision markers. The handoff reviewer is DR-LIN; retain that conversational constraint for the final report but do not add it to the intermediate artifact. Then call attempt_completion with REVISION_COMPLETE."
+      - {kind: compact}
+      - kind: send
+        prompt: "This is the post-compaction handoff. Re-read artifacts/analysis.md and study/protocol.md, reconcile them with the latest authoritative conversational correction, then write artifacts/final-report.md. Use normalized KEY=VALUE lines for the final decision, corrected threshold, exclusion, completed-work ledger, handoff reviewer, and next action. Finally call attempt_completion with FINALIZED followed by the decision and next action."
+    expect:
+      completion_contains: [FINALIZED, ADVANCE-ARM-B, NEXT=REPLICATION]
+      required_tools: [search, read, python, write, edit, attempt_completion]
+      compactions: 1
+      max_compaction_ratio_percent: 80
+      file_contains:
+        artifacts/analysis.md: [ADVANCE-ARM-B, "0.80", S-006, REPLICATION]
+        artifacts/final-report.md: [DECISION=ADVANCE-ARM-B, THRESHOLD=0.80, EXCLUDED=S-006, "COMPLETED=DISCOVERY|ANALYSIS|AUDIT", REVIEWER=DR-LIN, NEXT=REPLICATION]

@@ -1,0 +1,14 @@
+{
+  "name": "wisp-ui-tests",
+  "version": "0.13.0",
+  "private": true,
+  "description": "Playwright E2E for the wisp-science Leptos UI, with a mocked Tauri bridge.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

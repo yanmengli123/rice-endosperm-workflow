@@ -1,0 +1,5 @@
+[target.wasm32-unknown-unknown]
+# Disable reference-types so wasm-bindgen-cli 0.2.96 skips externref-xform.
+# webkit2gtk 2.52.3 ARM64 cannot expose externref tables in instance.exports,
+# so the externref optimization makes wisp-ui unrenderable on that engine.
+rustflags = ["-C", "target-feature=-reference-types"]

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": {
+      "script": "node sync-vendor.mjs && trunk serve --address 127.0.0.1 --port 1421 --dist dist-dev",
+      "cwd": "../ui"
+    },
+    "beforeBuildCommand": {
+      "script": "node sync-vendor.mjs && trunk build --release --cargo-profile release-wasm --dist dist",
+      "cwd": "../ui"
+    }
+  }
+}

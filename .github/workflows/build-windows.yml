@@ -1,0 +1,46 @@
+name: Windows Build
+
+# Manual diagnostic/packaging build (msi/nsis). Not tied to push — release
+# packages only come from release-windows.yml on a version tag.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ui -> target
+          cache-on-failure: true
+
+      - name: Cache Trunk and Tauri CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: tauri-tools-${{ runner.os }}-v1
+
+      - name: Install Trunk and Tauri CLI
+        shell: pwsh
+        run: |
+          if (-not (Get-Command trunk -ErrorAction SilentlyContinue)) {
+            cargo install trunk --locked
+          }
+          if (-not (Get-Command cargo-tauri -ErrorAction SilentlyContinue)) {
+            cargo install tauri-cli --version "^2" --locked
+          }
+
+      - uses: tauri-apps/tauri-action@v1
+        with:
+          projectPath: src-tauri
+          tauriScript: cargo tauri
+          uploadWorkflowArtifacts: true
+          args: --bundles msi,nsis

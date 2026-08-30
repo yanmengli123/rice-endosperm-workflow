@@ -1,0 +1,38 @@
+name: Wait for GitHub release
+description: Wait until a GitHub Release exists for a tag, then return its id. Does not create or edit the release.
+inputs:
+  tag:
+    description: Git tag whose GitHub Release must already exist
+    required: true
+  timeout-seconds:
+    description: How long to wait for Create Release to publish notes
+    required: false
+    default: "180"
+outputs:
+  release-id:
+    description: Numeric GitHub release id
+    value: ${{ steps.wait.outputs.release-id }}
+runs:
+  using: composite
+  steps:
+    - id: wait
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+      run: |
+        set -euo pipefail
+        deadline=$((SECONDS + TIMEOUT))
+        while (( SECONDS < deadline )); do
+          # tauri-action needs the numeric REST databaseId, not the GraphQL node id.
+          if id="$(gh release view "$TAG" --json databaseId --jq .databaseId 2>/dev/null)" && [ -n "$id" ]; then
+            echo "Found release $TAG databaseId=$id"
+            echo "release-id=$id" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Waiting for GitHub release $TAG..."
+          sleep 5
+        done
+        echo "::error::GitHub release for $TAG does not exist after ${TIMEOUT}s. Run the Create Release workflow first so notes are published before assets."
+        exit 1

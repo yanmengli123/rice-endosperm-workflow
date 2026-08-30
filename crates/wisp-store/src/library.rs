@@ -1,0 +1,763 @@
+use anyhow::{bail, Result};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
+use sqlx::{Row, SqlitePool};
+use std::path::Path;
+use std::str::FromStr;
+
+/// App-global, immutable snapshots. This deliberately uses a separate SQLite
+/// pool from [`crate::Store`], so project/session cascades cannot delete stars.
+#[derive(Clone)]
+pub struct LibraryStore {
+    pool: SqlitePool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryItem {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub language: Option<String>,
+    pub code: String,
+    pub content_type: Option<String>,
+    pub source_project_id: String,
+    pub source_project_name: String,
+    pub source_session_id: String,
+    pub source_session_title: String,
+    pub source_path: Option<String>,
+    pub created_at: i64,
+}
+
+/// Lightweight row for Library lists and star state. Full code/text stays out
+/// of the WebView until the active session or an opened detail asks for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryItemSummary {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub language: Option<String>,
+    pub code_preview: String,
+    pub source_project_id: String,
+    pub source_project_name: String,
+    pub source_session_id: String,
+    pub source_session_title: String,
+    pub source_path: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryItemDetail {
+    pub item: LibraryItem,
+    pub content: Option<Vec<u8>>,
+}
+
+/// One immutable version of a library item's code. The item row itself is the
+/// implicit version 1 (`id` equals the item id, `origin` is "original"); edits
+/// are append-only rows in `library_item_versions`, so the starred snapshot can
+/// never drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryItemVersion {
+    pub id: String,
+    pub item_id: String,
+    pub version_number: i64,
+    pub parent_version_id: Option<String>,
+    pub language: Option<String>,
+    pub code: String,
+    pub origin: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewLibraryItem {
+    pub kind: String,
+    pub title: String,
+    pub language: Option<String>,
+    pub code: String,
+    pub content_type: Option<String>,
+    pub content: Option<Vec<u8>>,
+    pub source_project_id: String,
+    pub source_project_name: String,
+    pub source_session_id: String,
+    pub source_session_title: String,
+    pub source_path: Option<String>,
+}
+
+const LIBRARY_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS library_items (\
+     id TEXT PRIMARY KEY, \
+     kind TEXT NOT NULL CHECK(kind IN ('code','figure','text')), \
+     title TEXT NOT NULL, language TEXT, code TEXT NOT NULL DEFAULT '', \
+     content_type TEXT, content_blob BLOB, content_sha256 TEXT NOT NULL, \
+     source_project_id TEXT NOT NULL, source_project_name TEXT NOT NULL, \
+     source_session_id TEXT NOT NULL, source_session_title TEXT NOT NULL, \
+     source_path TEXT, source_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, \
+     CHECK((kind IN ('code','text') AND content_blob IS NULL) OR \
+           (kind='figure' AND content_blob IS NOT NULL)))";
+
+impl LibraryStore {
+    pub async fn open(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
+            .create_if_missing(true)
+            // Wait for the WAL write lock instead of failing a concurrent writer
+            // with SQLITE_BUSY (default timeout is 0). See Store::open.
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(opts)
+            .await?;
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
+        // Older databases baked `kind IN ('code','figure')` into a CHECK
+        // constraint; SQLite cannot alter it in place, so rebuild once.
+        let existing_ddl: Option<String> = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='library_items'",
+        )
+        .fetch_optional(&pool)
+        .await?;
+        if existing_ddl.is_some_and(|ddl| !ddl.contains("'text'")) {
+            let mut tx = pool.begin().await?;
+            sqlx::query("ALTER TABLE library_items RENAME TO library_items_legacy")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(LIBRARY_ITEMS_DDL).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO library_items SELECT * FROM library_items_legacy")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DROP TABLE library_items_legacy")
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+        sqlx::query(LIBRARY_ITEMS_DDL).execute(&pool).await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ix_library_items_created \
+             ON library_items(created_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS library_item_versions (\
+             id TEXT PRIMARY KEY, item_id TEXT NOT NULL, \
+             version_number INTEGER NOT NULL, parent_version_id TEXT, \
+             language TEXT, code TEXT NOT NULL, origin TEXT NOT NULL, \
+             created_at INTEGER NOT NULL, UNIQUE(item_id, version_number))",
+        )
+        .execute(&pool)
+        .await?;
+        Ok(Self { pool })
+    }
+
+    /// Insert once for a logical source. Re-starring the same code cell,
+    /// text excerpt, or figure path returns its original immutable snapshot.
+    pub async fn insert(&self, item: NewLibraryItem) -> Result<LibraryItem> {
+        if !matches!(item.kind.as_str(), "code" | "figure" | "text") {
+            bail!("unsupported library item kind: {}", item.kind);
+        }
+        if item.title.trim().is_empty() {
+            bail!("library item title is required");
+        }
+        if item.kind != "figure" && item.content.is_some() {
+            bail!("only figure library items can contain a binary snapshot");
+        }
+        if item.kind == "figure" && item.content.is_none() {
+            bail!("figure library items require a binary snapshot");
+        }
+
+        let content_hash = if let Some(content) = item.content.as_deref() {
+            hex::encode(Sha256::digest(content))
+        } else {
+            let mut hasher = Sha256::new();
+            hasher.update(item.language.as_deref().unwrap_or_default().as_bytes());
+            hasher.update([0]);
+            hasher.update(item.code.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let source_key = if item.kind == "figure" {
+            format!(
+                "figure\0{}\0{}\0{}",
+                item.source_project_id,
+                item.source_session_id,
+                item.source_path.as_deref().unwrap_or_default()
+            )
+        } else {
+            format!(
+                "{}\0{}\0{}\0{}",
+                item.kind, item.source_project_id, item.source_session_id, content_hash
+            )
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO library_items(\
+             id,kind,title,language,code,content_type,content_blob,content_sha256,\
+             source_project_id,source_project_name,source_session_id,source_session_title,\
+             source_path,source_key,created_at) \
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) \
+             ON CONFLICT(source_key) DO NOTHING",
+        )
+        .bind(id)
+        .bind(&item.kind)
+        .bind(item.title.trim())
+        .bind(&item.language)
+        .bind(&item.code)
+        .bind(&item.content_type)
+        .bind(&item.content)
+        .bind(content_hash)
+        .bind(&item.source_project_id)
+        .bind(&item.source_project_name)
+        .bind(&item.source_session_id)
+        .bind(&item.source_session_title)
+        .bind(&item.source_path)
+        .bind(&source_key)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_by_source_key(&source_key)
+            .await?
+            .map(|detail| detail.item)
+            .ok_or_else(|| anyhow::anyhow!("failed to read inserted library item"))
+    }
+
+    pub async fn list(&self) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(
+            "SELECT id,kind,title,language,code,content_type,source_project_id,\
+             source_project_name,source_session_id,source_session_title,source_path,created_at \
+             FROM library_items ORDER BY created_at DESC,rowid DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_item).collect()
+    }
+
+    pub async fn list_summaries(&self) -> Result<Vec<LibraryItemSummary>> {
+        let rows = sqlx::query(
+            "SELECT id,kind,title,language,substr(code,1,512) AS code_preview,\
+             source_project_id,source_project_name,source_session_id,source_session_title,\
+             source_path,created_at FROM library_items ORDER BY created_at DESC,rowid DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_summary).collect()
+    }
+
+    pub async fn search_summaries(
+        &self,
+        query: &str,
+        kind: Option<&str>,
+    ) -> Result<Vec<LibraryItemSummary>> {
+        let kind = kind.filter(|kind| matches!(*kind, "code" | "figure" | "text"));
+        let rows = sqlx::query(
+            "SELECT id,kind,title,language,substr(code,1,512) AS code_preview,\
+             source_project_id,source_project_name,source_session_id,source_session_title,\
+             source_path,created_at FROM library_items \
+             WHERE (? IS NULL OR kind=?) AND (\
+               instr(lower(title),lower(?))>0 OR instr(lower(code),lower(?))>0 OR \
+               instr(lower(source_project_name),lower(?))>0 OR \
+               instr(lower(source_session_title),lower(?))>0) \
+             ORDER BY created_at DESC,rowid DESC",
+        )
+        .bind(kind)
+        .bind(kind)
+        .bind(query)
+        .bind(query)
+        .bind(query)
+        .bind(query)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_summary).collect()
+    }
+
+    pub async fn list_for_session(&self, session_id: &str) -> Result<Vec<LibraryItem>> {
+        let rows = sqlx::query(
+            "SELECT id,kind,title,language,code,content_type,source_project_id,\
+             source_project_name,source_session_id,source_session_title,source_path,created_at \
+             FROM library_items WHERE source_session_id=? ORDER BY created_at DESC,rowid DESC",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_item).collect()
+    }
+
+    pub async fn get(&self, id: &str) -> Result<Option<LibraryItemDetail>> {
+        let row = sqlx::query(
+            "SELECT id,kind,title,language,code,content_type,source_project_id,\
+             source_project_name,source_session_id,source_session_title,source_path,created_at,\
+             content_blob FROM library_items WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_detail).transpose()
+    }
+
+    async fn get_by_source_key(&self, key: &str) -> Result<Option<LibraryItemDetail>> {
+        let row = sqlx::query(
+            "SELECT id,kind,title,language,code,content_type,source_project_id,\
+             source_project_name,source_session_id,source_session_title,source_path,created_at,\
+             content_blob FROM library_items WHERE source_key=?",
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_detail).transpose()
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM library_item_versions WHERE item_id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let deleted = sqlx::query("DELETE FROM library_items WHERE id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
+    /// Append a new immutable version for `item_id`. The item row is never
+    /// updated. Saving code identical to the current version is a no-op that
+    /// returns the current version.
+    pub async fn insert_version(
+        &self,
+        item_id: &str,
+        language: Option<String>,
+        code: String,
+    ) -> Result<LibraryItemVersion> {
+        let mut tx = self.pool.begin().await?;
+        let item: Option<(Option<String>, String, i64)> =
+            sqlx::query_as("SELECT language, code, created_at FROM library_items WHERE id=?")
+                .bind(item_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(item) = item else {
+            bail!("library item not found: {item_id}");
+        };
+        let head: Option<(String, i64, Option<String>, Option<String>, String, i64)> =
+            sqlx::query_as(
+                "SELECT id, version_number, parent_version_id, language, code, created_at \
+                 FROM library_item_versions WHERE item_id=? \
+                 ORDER BY version_number DESC LIMIT 1",
+            )
+            .bind(item_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let current = match head {
+            Some((id, version_number, parent_version_id, language, code, created_at)) => {
+                LibraryItemVersion {
+                    id,
+                    item_id: item_id.to_string(),
+                    version_number,
+                    parent_version_id,
+                    language,
+                    code,
+                    origin: "edit".into(),
+                    created_at,
+                }
+            }
+            None => original_version(item_id, item),
+        };
+        if current.code == code && current.language == language {
+            return Ok(current);
+        }
+        let version = LibraryItemVersion {
+            id: uuid::Uuid::new_v4().to_string(),
+            item_id: item_id.to_string(),
+            version_number: current.version_number + 1,
+            parent_version_id: Some(current.id),
+            language,
+            code,
+            origin: "edit".into(),
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        sqlx::query(
+            "INSERT INTO library_item_versions(\
+             id,item_id,version_number,parent_version_id,language,code,origin,created_at) \
+             VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .bind(&version.id)
+        .bind(&version.item_id)
+        .bind(version.version_number)
+        .bind(&version.parent_version_id)
+        .bind(&version.language)
+        .bind(&version.code)
+        .bind(&version.origin)
+        .bind(version.created_at)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(version)
+    }
+
+    /// Full version history: the implicit original first, then edits in
+    /// ascending version order. Empty when the item no longer exists.
+    pub async fn list_versions(&self, item_id: &str) -> Result<Vec<LibraryItemVersion>> {
+        let item: Option<(Option<String>, String, i64)> =
+            sqlx::query_as("SELECT language, code, created_at FROM library_items WHERE id=?")
+                .bind(item_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(item) = item else {
+            return Ok(Vec::new());
+        };
+        let mut out = vec![original_version(item_id, item)];
+        let rows: Vec<(String, i64, Option<String>, Option<String>, String, i64)> = sqlx::query_as(
+            "SELECT id,version_number,parent_version_id,language,code,created_at \
+             FROM library_item_versions WHERE item_id=? ORDER BY version_number ASC",
+        )
+        .bind(item_id)
+        .fetch_all(&self.pool)
+        .await?;
+        out.extend(rows.into_iter().map(
+            |(id, version_number, parent_version_id, language, code, created_at)| {
+                LibraryItemVersion {
+                    id,
+                    item_id: item_id.to_string(),
+                    version_number,
+                    parent_version_id,
+                    language,
+                    code,
+                    origin: "edit".into(),
+                    created_at,
+                }
+            },
+        ));
+        Ok(out)
+    }
+}
+
+fn original_version(
+    item_id: &str,
+    (language, code, created_at): (Option<String>, String, i64),
+) -> LibraryItemVersion {
+    LibraryItemVersion {
+        id: item_id.to_string(),
+        item_id: item_id.to_string(),
+        version_number: 1,
+        parent_version_id: None,
+        language,
+        code,
+        origin: "original".into(),
+        created_at,
+    }
+}
+
+fn row_to_item(row: SqliteRow) -> Result<LibraryItem> {
+    Ok(LibraryItem {
+        id: row.try_get("id")?,
+        kind: row.try_get("kind")?,
+        title: row.try_get("title")?,
+        language: row.try_get("language")?,
+        code: row.try_get("code")?,
+        content_type: row.try_get("content_type")?,
+        source_project_id: row.try_get("source_project_id")?,
+        source_project_name: row.try_get("source_project_name")?,
+        source_session_id: row.try_get("source_session_id")?,
+        source_session_title: row.try_get("source_session_title")?,
+        source_path: row.try_get("source_path")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn row_to_summary(row: SqliteRow) -> Result<LibraryItemSummary> {
+    Ok(LibraryItemSummary {
+        id: row.try_get("id")?,
+        kind: row.try_get("kind")?,
+        title: row.try_get("title")?,
+        language: row.try_get("language")?,
+        code_preview: row.try_get("code_preview")?,
+        source_project_id: row.try_get("source_project_id")?,
+        source_project_name: row.try_get("source_project_name")?,
+        source_session_id: row.try_get("source_session_id")?,
+        source_session_title: row.try_get("source_session_title")?,
+        source_path: row.try_get("source_path")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn row_to_detail(row: SqliteRow) -> Result<LibraryItemDetail> {
+    let content = row.try_get("content_blob")?;
+    Ok(LibraryItemDetail {
+        item: row_to_item(row)?,
+        content,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Store;
+    use wisp_llm::Message;
+
+    fn new_item(kind: &str) -> NewLibraryItem {
+        NewLibraryItem {
+            kind: kind.into(),
+            title: if kind == "code" {
+                "print(1)".into()
+            } else {
+                "plot.png".into()
+            },
+            language: Some("python".into()),
+            code: "print(1)".into(),
+            content_type: (kind == "figure").then(|| "image/png".into()),
+            content: (kind == "figure").then(|| vec![1, 2, 3, 4]),
+            source_project_id: "project-1".into(),
+            source_project_name: "Project one".into(),
+            source_session_id: "session-1".into(),
+            source_session_title: "Analysis".into(),
+            source_path: (kind == "figure").then(|| "figures/plot.png".into()),
+        }
+    }
+
+    async fn store() -> LibraryStore {
+        let path = std::env::temp_dir()
+            .join(format!("wisp-library-test-{}", uuid::Uuid::new_v4()))
+            .join("library.sqlite");
+        LibraryStore::open(&path).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn snapshots_are_deduplicated_and_keep_binary_content() {
+        let store = store().await;
+        let first = store.insert(new_item("figure")).await.unwrap();
+        let second = store.insert(new_item("figure")).await.unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(store.list().await.unwrap().len(), 1);
+        assert_eq!(
+            store.get(&first.id).await.unwrap().unwrap().content,
+            Some(vec![1, 2, 3, 4])
+        );
+    }
+
+    #[tokio::test]
+    async fn text_excerpts_are_stored_and_deduplicated_per_session() {
+        let store = store().await;
+        let excerpt = NewLibraryItem {
+            kind: "text".into(),
+            title: "The p-value is significant".into(),
+            language: None,
+            code: "The p-value is significant across all replicates.".into(),
+            content_type: None,
+            content: None,
+            source_path: None,
+            ..new_item("code")
+        };
+        let first = store.insert(excerpt.clone()).await.unwrap();
+        let second = store.insert(excerpt.clone()).await.unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.kind, "text");
+        // The same excerpt starred as code is a distinct snapshot.
+        let as_code = store
+            .insert(NewLibraryItem {
+                kind: "code".into(),
+                ..excerpt
+            })
+            .await
+            .unwrap();
+        assert_ne!(first.id, as_code.id);
+    }
+
+    #[tokio::test]
+    async fn list_rows_are_bounded_but_session_and_search_keep_full_semantics() {
+        let store = store().await;
+        let marker = "only-at-the-end";
+        let code = format!("{}{}", "x".repeat(2_000), marker);
+        let item = store
+            .insert(NewLibraryItem {
+                title: "large cell".into(),
+                code: code.clone(),
+                ..new_item("code")
+            })
+            .await
+            .unwrap();
+
+        let summaries = store.list_summaries().await.unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries[0].code_preview.len() <= 512);
+        assert!(!summaries[0].code_preview.contains(marker));
+
+        let matches = store.search_summaries(marker, Some("code")).await.unwrap();
+        assert_eq!(matches[0].id, item.id);
+        assert_eq!(
+            store.list_for_session("session-1").await.unwrap()[0].code,
+            code
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_databases_are_rebuilt_to_accept_text_items() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "wisp-library-migrate-test-{}",
+                uuid::Uuid::new_v4()
+            ))
+            .join("library.sqlite");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let opts =
+            sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+                .unwrap()
+                .create_if_missing(true);
+        let pool = SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE library_items (\
+             id TEXT PRIMARY KEY, \
+             kind TEXT NOT NULL CHECK(kind IN ('code','figure')), \
+             title TEXT NOT NULL, language TEXT, code TEXT NOT NULL DEFAULT '', \
+             content_type TEXT, content_blob BLOB, content_sha256 TEXT NOT NULL, \
+             source_project_id TEXT NOT NULL, source_project_name TEXT NOT NULL, \
+             source_session_id TEXT NOT NULL, source_session_title TEXT NOT NULL, \
+             source_path TEXT, source_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, \
+             CHECK((kind='code' AND content_blob IS NULL) OR \
+                   (kind='figure' AND content_blob IS NOT NULL)))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO library_items(id,kind,title,code,content_sha256,\
+             source_project_id,source_project_name,source_session_id,source_session_title,\
+             source_key,created_at) VALUES('legacy-1','code','print(1)','print(1)','hash',\
+             'project-1','Project one','session-1','Analysis',?,0)",
+        )
+        .bind("code\0k")
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let store = LibraryStore::open(&path).await.unwrap();
+        let excerpt = NewLibraryItem {
+            kind: "text".into(),
+            title: "excerpt".into(),
+            language: None,
+            content_type: None,
+            content: None,
+            source_path: None,
+            ..new_item("code")
+        };
+        store.insert(excerpt).await.unwrap();
+        let items = store.list().await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|item| item.id == "legacy-1"));
+        assert!(items.iter().any(|item| item.kind == "text"));
+    }
+
+    #[tokio::test]
+    async fn editing_appends_versions_and_never_touches_the_original() {
+        let store = store().await;
+        let item = store.insert(new_item("code")).await.unwrap();
+        let v2 = store
+            .insert_version(&item.id, Some("python".into()), "print(2)".into())
+            .await
+            .unwrap();
+        let v3 = store
+            .insert_version(&item.id, Some("python".into()), "print(3)".into())
+            .await
+            .unwrap();
+        assert_eq!((v2.version_number, v3.version_number), (2, 3));
+        assert_eq!(v2.parent_version_id.as_deref(), Some(item.id.as_str()));
+        assert_eq!(v3.parent_version_id.as_deref(), Some(v2.id.as_str()));
+
+        // The starred snapshot is byte-identical after edits.
+        let stored = store.get(&item.id).await.unwrap().unwrap().item;
+        assert_eq!(stored.code, "print(1)");
+
+        let versions = store.list_versions(&item.id).await.unwrap();
+        assert_eq!(
+            versions
+                .iter()
+                .map(|v| (v.version_number, v.code.as_str(), v.origin.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "print(1)", "original"),
+                (2, "print(2)", "edit"),
+                (3, "print(3)", "edit"),
+            ]
+        );
+        assert_eq!(versions[0].id, item.id);
+
+        // Saving the current code again is a no-op, not a new version.
+        let again = store
+            .insert_version(&item.id, Some("python".into()), "print(3)".into())
+            .await
+            .unwrap();
+        assert_eq!(again.id, v3.id);
+        assert_eq!(store.list_versions(&item.id).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_item_removes_its_versions() {
+        let store = store().await;
+        let item = store.insert(new_item("code")).await.unwrap();
+        store
+            .insert_version(&item.id, None, "print(2)".into())
+            .await
+            .unwrap();
+        assert!(store.delete(&item.id).await.unwrap());
+        assert!(store.list_versions(&item.id).await.unwrap().is_empty());
+        let orphans: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM library_item_versions WHERE item_id=?")
+                .bind(&item.id)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_star_does_not_touch_other_snapshots() {
+        let store = store().await;
+        let figure = store.insert(new_item("figure")).await.unwrap();
+        let code = store.insert(new_item("code")).await.unwrap();
+        assert!(store.delete(&figure.id).await.unwrap());
+        assert!(store.get(&figure.id).await.unwrap().is_none());
+        assert_eq!(store.get(&code.id).await.unwrap().unwrap().item, code);
+    }
+
+    #[tokio::test]
+    async fn project_deletion_cannot_cascade_into_the_global_library() {
+        let dir = std::env::temp_dir().join(format!(
+            "wisp-library-separate-db-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let project_store = Store::open(&dir.join("wisp.sqlite")).await.unwrap();
+        let library = LibraryStore::open(&dir.join("library.sqlite"))
+            .await
+            .unwrap();
+        let project_root = dir.join("project-one").to_string_lossy().into_owned();
+        project_store
+            .create_project("project-1", "Project one", &project_root)
+            .await
+            .unwrap();
+        project_store
+            .create_frame("session-1", "project-1", "OPERON", "model")
+            .await
+            .unwrap();
+        project_store
+            .append_message("session-1", 1, &Message::user("make a plot"))
+            .await
+            .unwrap();
+        let starred = library.insert(new_item("figure")).await.unwrap();
+
+        project_store.delete_project("project-1").await.unwrap();
+
+        assert!(project_store
+            .get_project("project-1")
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            library.get(&starred.id).await.unwrap().unwrap().content,
+            Some(vec![1, 2, 3, 4])
+        );
+    }
+}

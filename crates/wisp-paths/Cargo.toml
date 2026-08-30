@@ -1,0 +1,8 @@
+[package]
+name = "wisp-paths"
+description = "Runtime install/resource path resolution for dev checkouts and Tauri bundles."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

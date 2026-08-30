@@ -1,0 +1,18 @@
+[package]
+name = "wisp-skills"
+description = "SKILL.md discovery + frontmatter parsing, and the `use_skill` tool."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+async-trait = "0.1"
+walkdir = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-tools = { workspace = true }
+wisp-paths = { workspace = true }

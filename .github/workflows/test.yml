@@ -1,0 +1,182 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  release-notes-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release-notes title helper
+        run: bash scripts/github_release_notes.sh --self-test
+
+  headless-agent-eval:
+    name: Headless agent eval (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: headless-agent-${{ matrix.os }}
+
+      - name: Run MCP process-tree shutdown regression
+        run: cargo test -p wisp-mcp --test process_tree_shutdown
+
+      # Interpreters are often launchers: Windows Rscript.exe re-launches
+      # bin\x64\Rscript.exe through cmd.exe. Stopping a runtime must reclaim
+      # that whole tree, which only a real per-OS process tree can prove.
+      - name: Run runtime worker process-tree regression
+        run: cargo test -p wisp-runtime --test worker_process_tree
+
+      # The kernel worker is Python, so its tests are too. Run them on all
+      # three OSes: the worker's write reporting and its process handling are
+      # exactly the parts that differ per platform.
+      - name: Run Python kernel worker tests (Unix)
+        if: runner.os != 'Windows'
+        run: python3 -m unittest discover -s python -p "test_kernel_worker.py" -v
+
+      # python3 is not on PATH on windows-latest; the launcher is `python`.
+      - name: Run Python kernel worker tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m unittest discover -s python -p "test_kernel_worker.py" -v
+
+      - name: Run deterministic headless agent suite
+        run: cargo run -p wisp-cli -- eval --artifacts target/headless-agent-eval --save target/headless-agent-eval/report.json
+
+      - name: Upload headless eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-agent-eval-${{ matrix.os }}
+          path: target/headless-agent-eval
+          if-no-files-found: error
+
+  rust:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [stable, 1.88.0]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keep the workspace MSRV explicit; floating stable alone does not catch
+      # accidental dependency bumps past the version declared in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: wasm32-unknown-unknown
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ui -> target
+          cache-on-failure: true
+          shared-key: rust-${{ matrix.toolchain }}
+
+      # src-tauri (workspace member) pulls in webkit2gtk/gtk3 on Linux; these
+      # aren't preinstalled on ubuntu-latest. See tauri.app/start/prerequisites.
+      # Cache the .debs: azure.archive.ubuntu.com often crawls (~80 kB/s) or
+      # hangs for hours on libwebkit2gtk-4.1-0 (~25 MB).
+      - name: Cache Tauri apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/apt-archives
+          key: apt-tauri-${{ runner.os }}-${{ runner.arch }}-webkit4.1-v1
+
+      - name: Install Tauri Linux dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          CACHE="${HOME}/.cache/apt-archives"
+          mkdir -p "${CACHE}/partial"
+          cleanup() {
+            sudo chown -R "$(id -u):$(id -g)" "${CACHE}" 2>/dev/null || true
+            rm -rf "${CACHE}/partial" "${CACHE}/lock"
+          }
+          trap cleanup EXIT
+          APT_OPTS=(
+            -o "Dir::Cache::archives=${CACHE}"
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+          # azure.archive.ubuntu.com also hangs on the index fetch itself,
+          # burning the whole `apt-get update` budget on Ign retries. Point
+          # the runner's mirror list at the canonical archive and retry the
+          # update, so one slow mirror cannot fail the job.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/apt-mirrors.txt
+          fi
+          for attempt in 1 2 3; do
+            sudo timeout 4m apt-get "${APT_OPTS[@]}" update && break
+            if [ "$attempt" = 3 ]; then
+              echo "apt-get update failed after ${attempt} attempts" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          sudo timeout 20m apt-get "${APT_OPTS[@]}" install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo check (wasm UI crate)
+        run: cargo check --target wasm32-unknown-unknown
+        working-directory: ui
+
+  ui-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ui -> target
+          cache-on-failure: true
+
+      - name: Cache Trunk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: trunk-${{ runner.os }}-v1
+
+      - name: Install Trunk
+        run: command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright deps
+        working-directory: ui-tests
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: ui-tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright E2E
+        working-directory: ui-tests
+        run: npx playwright test

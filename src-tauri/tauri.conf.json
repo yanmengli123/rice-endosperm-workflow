@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "wisp-science",
+  "version": "1.8.0",
+  "identifier": "science.wisp-science",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:1421",
+    "beforeDevCommand": { "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File dev.ps1", "cwd": "../ui" },
+    "beforeBuildCommand": { "script": "powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File build.ps1", "cwd": "../ui" }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "../skills/": "skills/",
+      "../python/": "python/",
+      "../r/": "r/",
+      "../mcp-servers/bio-tools/": "mcp-servers/bio-tools/",
+      "../browser-extension/": "browser-extension/",
+      "../seed/": "seed/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0NzgxMDkzMTcwOTUxNzIKUldSeVVRa1hreEI0dE10Uk5iVU81djVSWFpwdHBIckZtU0xpdDhtalNJRWlNRGkyekZ6RG5KVGQK",
+      "endpoints": [
+        "https://github.com/xuzhougeng/wisp-science/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

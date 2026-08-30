@@ -1,0 +1,350 @@
+schema: wisp.agent-eval-suite.v1
+id: wisp-offline-core-v1
+description: Deterministic headless coverage for the native agent loop and host boundaries.
+defaults:
+  max_context_tokens: 128000
+  max_rounds: 12
+  timeout_ms: 15000
+  max_tool_errors: 0
+
+cases:
+  - id: read-facts
+    description: Read grounded facts without modifying the workspace.
+    tags: [filesystem, read]
+    prompt: Inspect notes.txt and report the number of non-empty lines and first word.
+    files:
+      notes.txt: "alpha beta\n\ngamma delta\n"
+    allowed_tools: [read, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: read-1, name: read, arguments: {path: notes.txt}}
+        input_tokens: 20
+        output_tokens: 4
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "lines=2; first=alpha"}}
+        input_tokens: 30
+        output_tokens: 4
+    limits: {max_tool_calls: 2}
+    expect:
+      completion_contains: ["lines=2", "first=alpha"]
+      required_tools: [read, attempt_completion]
+      forbidden_tools: [write, edit, shell]
+      tool_order: [read, attempt_completion]
+      tool_args:
+        - {name: read, pointer: /path, equals: notes.txt}
+
+  - id: targeted-edit
+    description: Apply one exact edit and preserve every other workspace byte.
+    tags: [filesystem, write]
+    prompt: Change iterations from 10 to 25 in config.toml and preserve everything else.
+    files:
+      config.toml: "iterations = 10\nmode = \"fast\"\n"
+    allowed_tools: [read, edit, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: read-1, name: read, arguments: {path: config.toml}}
+      - tool_calls:
+          - id: edit-1
+            name: edit
+            arguments: {path: config.toml, old: "iterations = 10", new: "iterations = 25"}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: updated config}}
+    expect:
+      expected_files:
+        config.toml: "iterations = 25\nmode = \"fast\"\n"
+      required_tools: [read, edit, attempt_completion]
+      tool_order: [read, edit, attempt_completion]
+      tool_args:
+        - {name: edit, pointer: /new, equals: "iterations = 25"}
+
+  - id: shell-execution
+    description: Run a bounded portable shell command and capture its result.
+    tags: [shell, execution]
+    prompt: Use the shell to print the portable marker HEADLESS_OK.
+    allowed_tools: [shell, attempt_completion]
+    # Windows CI runners can spend far longer than the 15s default spawning the
+    # first powershell process (Defender scans the fresh debug binary), so give
+    # this case the same headroom as the shell tool's own 60s timeout.
+    limits: {timeout_ms: 60000}
+    script:
+      - tool_calls:
+          - {id: shell-1, name: shell, arguments: {cmd: "echo HEADLESS_OK"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: HEADLESS_OK}}
+    expect:
+      completion_contains: [HEADLESS_OK]
+      required_tools: [shell, attempt_completion]
+      tool_order: [shell, attempt_completion]
+
+  - id: python-runtime-persistence
+    description: Keep Python state across cells through the production runtime tool boundary.
+    tags: [runtime, python]
+    prompt: Store the marker 41 in Python, read it in a second cell, and report it.
+    fixture_runtimes: true
+    allowed_tools: [python, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: python-set-1, name: python, arguments: {code: "set:41"}}
+      - tool_calls:
+          - {id: python-get-1, name: python, arguments: {code: get}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "python persisted 41"}}
+    expect:
+      completion_contains: [persisted, "41"]
+      required_tools: [python, attempt_completion]
+      tool_order: [python, python, attempt_completion]
+      tool_args:
+        - {name: python, pointer: /code, equals: "set:41"}
+
+  - id: r-runtime-persistence
+    description: Keep R state across cells through the production runtime tool boundary.
+    tags: [runtime, r]
+    prompt: Store the marker 73 in R, read it in a second cell, and report it.
+    fixture_runtimes: true
+    allowed_tools: [r, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: r-set-1, name: r, arguments: {code: "set:73"}}
+      - tool_calls:
+          - {id: r-get-1, name: r, arguments: {code: get}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "R persisted 73"}}
+    expect:
+      completion_contains: [persisted, "73"]
+      required_tools: [r, attempt_completion]
+      tool_order: [r, r, attempt_completion]
+      tool_args:
+        - {name: r, pointer: /code, equals: "set:73"}
+
+  - id: approval-denial
+    description: Denied mutations are reported and the workspace stays unchanged.
+    tags: [approval, safety, filesystem]
+    prompt: Try to write blocked.txt, then report that the host denied it.
+    allowed_tools: [write, attempt_completion]
+    approval:
+      modes: {write: ask}
+      decisions: [false]
+    script:
+      - tool_calls:
+          - {id: write-1, name: write, arguments: {path: blocked.txt, content: "no\n"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "write denied"}}
+    limits: {max_tool_errors: 1}
+    expect:
+      completion_contains: [denied]
+      required_tools: [write, attempt_completion]
+      approvals: 1
+
+  - id: skill-loading
+    description: Discover and load a project-local Skill through production tools.
+    tags: [skills]
+    prompt: Find the demo-analysis Skill, load it, and report its marker.
+    files:
+      .wisp/skills/demo-analysis/SKILL.md: |
+        ---
+        name: demo-analysis
+        description: Offline demo analysis workflow.
+        tags: [offline, demo]
+        ---
+        # Demo
+        SKILL_MARKER_42
+    allowed_tools: [search_skills, use_skill, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: search-1, name: search_skills, arguments: {query: demo analysis}}
+      - tool_calls:
+          - {id: skill-1, name: use_skill, arguments: {name: demo-analysis}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: SKILL_MARKER_42}}
+    expect:
+      completion_contains: [SKILL_MARKER_42]
+      required_tools: [search_skills, use_skill, attempt_completion]
+      tool_order: [search_skills, use_skill, attempt_completion]
+      request_contains: [SKILL_MARKER_42]
+
+  - id: deferred-mcp
+    description: Discover and call a deferred MCP fixture through the gateway.
+    tags: [mcp]
+    prompt: Search the MCP catalog for a gene lookup tool and call it for TP53.
+    allowed_tools: [fixture_gene_lookup, attempt_completion]
+    fixture_mcp:
+      fixture_gene_lookup: "TP53 chromosome=17"
+    script:
+      - tool_calls:
+          - {id: search-1, name: search_mcp_tools, arguments: {query: gene lookup}}
+      - tool_calls:
+          - id: mcp-1
+            name: use_mcp_tool
+            arguments: {tool_name: fixture_gene_lookup, tool_input: {query: TP53}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "TP53 chromosome=17"}}
+    expect:
+      completion_contains: [TP53, chromosome=17]
+      required_tools: [search_mcp_tools, use_mcp_tool, attempt_completion]
+      tool_order: [search_mcp_tools, use_mcp_tool, attempt_completion]
+
+  - id: explore-delegation
+    description: Delegate read-only discovery to the production explore subagent boundary.
+    tags: [delegation, subagent, filesystem]
+    prompt: Delegate inspection of notes.txt and return only the subagent's grounded marker.
+    files:
+      notes.txt: "DELEGATED_FACT_88\n"
+    allowed_tools: [explore, attempt_completion]
+    explore_script:
+      - tool_calls:
+          - {id: nested-read-1, name: read, arguments: {path: notes.txt}}
+      - content: "findings:\n- claim: DELEGATED_FACT_88 | path: notes.txt | lines: 1\nsummary: grounded"
+        finish_reason: stop
+    script:
+      - tool_calls:
+          - {id: explore-1, name: explore, arguments: {question: "What marker is in notes.txt?"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: DELEGATED_FACT_88}}
+    expect:
+      completion_contains: [DELEGATED_FACT_88]
+      request_contains: [DELEGATED_FACT_88]
+      required_tools: [explore, attempt_completion]
+      tool_order: [explore, attempt_completion]
+
+  - id: resume-without-tool-replay
+    description: Resume a failed turn without replaying a completed mutation.
+    tags: [resume, session]
+    prompt: Write result.txt, tolerate the interrupted reply, then resume and finish.
+    allowed_tools: [write, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: write-1, name: write, arguments: {path: result.txt, content: "done\n"}}
+      - content: ""
+        finish_reason: stop
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: resumed}}
+    actions:
+      - {kind: send, prompt: "Write result.txt and finish.", allow_error: true}
+      - {kind: resume}
+    expect:
+      expected_files: {result.txt: "done\n"}
+      completion_contains: [resumed]
+      required_tools: [write, attempt_completion]
+      tool_order: [write, attempt_completion]
+
+  - id: session-restart
+    description: Persist and restore the native context across a headless restart.
+    tags: [session, restart]
+    prompt: Remember a fact, restart, then prove that the next request still sees it.
+    allowed_tools: [attempt_completion]
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: remembered}}
+      - tool_calls:
+          - {id: done-2, name: attempt_completion, arguments: {result: SESSION_FACT_77}}
+    actions:
+      - {kind: send, prompt: "Remember SESSION_FACT_77."}
+      - {kind: restart}
+      - {kind: send, prompt: "What fact did I ask you to remember?"}
+    expect:
+      completion_contains: [SESSION_FACT_77]
+      request_contains: [SESSION_FACT_77]
+      required_tools: [attempt_completion]
+
+  - id: queued-guidance
+    description: Consume a queued steering message at the next model boundary.
+    tags: [guidance, queue]
+    prompt: Follow the queued instruction.
+    allowed_tools: [attempt_completion]
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: GUIDANCE_MARKER_9}}
+    actions:
+      - kind: send
+        prompt: Follow the queued instruction.
+        guidance: ["Use GUIDANCE_MARKER_9 in the result."]
+    expect:
+      completion_contains: [GUIDANCE_MARKER_9]
+      request_contains: [GUIDANCE_MARKER_9]
+
+  - id: cancellation
+    description: Cancel an in-flight deterministic provider response.
+    tags: [cancel, lifecycle]
+    prompt: This response should be cancelled before it completes.
+    allowed_tools: [attempt_completion]
+    cancel_after_ms: 10
+    script:
+      - delay_ms: 200
+        tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: too-late}}
+    expect:
+      outcome: error
+      error_contains: [stopped by user]
+
+  - id: vision-fallback
+    description: Analyze an image tool result through a separate vision provider.
+    tags: [vision, image]
+    prompt: Inspect pixel.png and report the vision marker.
+    base64_files:
+      pixel.png: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+    allowed_tools: [view_image, attempt_completion]
+    vision_script:
+      - content: VISION_MARKER_BLUE_PIXEL
+        finish_reason: stop
+    script:
+      - tool_calls:
+          - {id: image-1, name: view_image, arguments: {path: pixel.png, question: "What is visible?"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: VISION_MARKER_BLUE_PIXEL}}
+    expect:
+      completion_contains: [VISION_MARKER_BLUE_PIXEL]
+      required_tools: [view_image, attempt_completion]
+
+  - id: manual-compaction
+    description: Archive and compact a seeded long context without network access.
+    tags: [compaction, context]
+    prompt: Compact the seeded history, then finish.
+    allowed_tools: [attempt_completion]
+    limits: {max_context_tokens: 10000}
+    context_seed:
+      - {role: user, repeat: 30, content: "COMPACTION_FACT_A xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 30, content: "answer A yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, repeat: 30, content: "COMPACTION_FACT_B xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 30, content: "answer B yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+    script:
+      - content: "summary keeps COMPACTION_FACT_A and COMPACTION_FACT_B"
+        finish_reason: stop
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: compacted}}
+    actions:
+      - {kind: compact}
+      - {kind: send, prompt: "Finish after compaction."}
+    expect:
+      completion_contains: [compacted]
+      request_contains: [COMPACTION_FACT]
+
+  - id: plan-mode-gate
+    description: Plan mode blocks execution even when the model asks for shell.
+    tags: [plan, safety]
+    prompt: Attempt a shell command while plan mode is active, then report the refusal.
+    plan_mode: true
+    allowed_tools: [shell, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: shell-1, name: shell, arguments: {cmd: "echo SHOULD_NOT_RUN"}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "shell unavailable in plan mode"}}
+    limits: {max_tool_errors: 1}
+    expect:
+      completion_contains: [plan mode]
+      required_tools: [shell, attempt_completion]
+
+  - id: path-sandbox
+    description: Scoped reads reject traversal outside the temporary project.
+    tags: [filesystem, safety, windows, macos]
+    prompt: Try to read outside the project and report the sandbox refusal.
+    allowed_tools: [read, attempt_completion]
+    script:
+      - tool_calls:
+          - {id: read-1, name: read, arguments: {path: ../secret.txt}}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "sandbox rejected traversal"}}
+    limits: {max_tool_errors: 1}
+    expect:
+      completion_contains: [sandbox]
+      required_tools: [read, attempt_completion]

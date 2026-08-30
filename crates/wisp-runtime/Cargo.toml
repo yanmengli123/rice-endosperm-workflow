@@ -1,0 +1,40 @@
+[package]
+name = "wisp-runtime"
+description = "Managed project-scoped Python and R runtimes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+anyhow = { workspace = true }
+which = "7"
+uuid = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-tools = { workspace = true }
+wisp-paths = { workspace = true }
+dunce = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+# test-util enables tokio::time::pause so stop-budget tests skip real waits.
+tokio = { workspace = true, features = ["test-util"] }
+
+# The process-tree fixture inspects worker and grandchild pids directly.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[[test]]
+name = "worker_process_tree"
+path = "tests/worker_process_tree.rs"
+harness = false

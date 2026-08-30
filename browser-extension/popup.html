@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wisp Browser Bridge</title>
+    <style>
+      body { font: 13px system-ui, sans-serif; margin: 14px; min-width: 300px; color: #202124; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      #status { margin-bottom: 6px; }
+      .ok { color: #137333; }
+      .bad { color: #b3261e; }
+      small, .meta { color: #5f6368; display: block; margin: 4px 0; }
+      button { margin: 8px 8px 0 0; }
+      ul { padding-left: 18px; margin: 6px 0 0; max-height: 140px; overflow: auto; }
+      li { margin: 2px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Wisp Real Browser Bridge</h1>
+    <div id="status">Checking…</div>
+    <small id="meta"></small>
+    <small>Uses tabs in this Chrome profile. Wisp must be running.</small>
+    <ul id="tabs"></ul>
+    <button id="reconnect" type="button">Reconnect</button>
+    <button id="pause" type="button">Pause control</button>
+    <button id="resume" type="button">Resume control</button>
+    <button id="release" type="button">Release managed tabs</button>
+    <button id="disconnect" type="button">Disconnect Wisp</button>
+    <script src="popup.js"></script>
+  </body>
+</html>

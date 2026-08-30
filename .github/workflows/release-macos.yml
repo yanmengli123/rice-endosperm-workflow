@@ -1,0 +1,147 @@
+name: macOS Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and publish (e.g. v0.1.0)
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      # Serial so the two jobs merge latest.json in order instead of racing
+      # the updater manifest. Asset uploads no longer rewrite release notes.
+      max-parallel: 1
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/actions/wait-for-release
+          path: _release_ci
+
+      - name: Wait for GitHub release
+        id: release
+        uses: ./_release_ci/.github/actions/wait-for-release
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ui -> target
+          cache-on-failure: true
+
+      - name: Cache Trunk and Tauri CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: tauri-tools-${{ runner.os }}-v1
+
+      - name: Install Trunk and Tauri CLI
+        run: |
+          command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+          command -v cargo-tauri >/dev/null 2>&1 || cargo install tauri-cli --version "^2" --locked
+
+      # Import the Developer ID cert into a temp keychain and extract the signing
+      # identity at runtime, so no hardcoded APPLE_SIGNING_IDENTITY secret is needed.
+      - name: Import Developer ID certificate
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="${RUNNER_TEMP}/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          python3 -c 'import base64,os; open("cert.p12","wb").write(base64.b64decode(os.environ["MAC_CERT_P12_BASE64"].strip()))'
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security import cert.p12 -k "${KEYCHAIN_PATH}" -P "${MAC_CERT_PASSWORD}" \
+            -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcrun
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          IDENTITY="$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "${IDENTITY}" ]; then
+            echo "::error::No Developer ID Application identity in the .p12 — check MAC_CERT_P12_BASE64 / MAC_CERT_PASSWORD and that the .p12 contains the private key." >&2
+            security find-identity -v -p codesigning "${KEYCHAIN_PATH}" >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=${IDENTITY}" >> "${GITHUB_ENV}"
+          echo "CODESIGN_KEYCHAIN=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
+          rm -f cert.p12
+
+      # Per-arch bundles: aarch64 (Apple Silicon) and x86_64 (Intel) built separately.
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # APPLE_SIGNING_IDENTITY comes from the import step above (via $GITHUB_ENV).
+          # No APPLE_CERTIFICATE here — the cert is already in the keychain we set up.
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: src-tauri
+          tauriScript: cargo tauri
+          releaseId: ${{ steps.release.outputs.release-id }}
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          args: --config tauri.updater.conf.json --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          if [ -n "${CODESIGN_KEYCHAIN:-}" ] && [ -f "${CODESIGN_KEYCHAIN}" ]; then
+            security delete-keychain "${CODESIGN_KEYCHAIN}" || true
+          fi
+
+  verify-updater-assets:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Verify updater manifest and both macOS architectures
+        run: |
+          set -euo pipefail
+          manifest_dir="${RUNNER_TEMP}/wisp-updater-manifest"
+          mkdir -p "${manifest_dir}"
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern latest.json \
+            --dir "${manifest_dir}"
+          jq -e '
+            (.version | type == "string") and
+            (.platforms["darwin-aarch64"].url | type == "string" and length > 0) and
+            (.platforms["darwin-aarch64"].signature | length > 0) and
+            (.platforms["darwin-x86_64"].url | type == "string" and length > 0) and
+            (.platforms["darwin-x86_64"].signature | length > 0)
+          ' "${manifest_dir}/latest.json"

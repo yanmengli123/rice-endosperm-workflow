@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="models">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science 模型配置说明：OpenAI 兼容、OpenAI Responses 和 Anthropic API。">
+  <title>模型配置 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="doc-page">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="index.html#features" data-i18n="nav.features">功能</a>
+        <a href="index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="model-configuration.html" aria-current="page" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="doc-hero">
+      <div class="container">
+        <div class="eyebrow">Settings -> Models</div>
+        <h1>模型配置</h1>
+        <p class="lead" data-i18n="models.lead">
+          Wisp Science 的桌面版使用模型 profile 管理远程 API 后端。每个 profile
+          可以配置 provider、API URL、模型 ID、高级参数和独立 API key。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-i18n="models.download">下载最新版</a>
+          <a class="btn btn-secondary" href="acp-agents.html" data-i18n="models.acpCta">ACP Agent 配置</a>
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/model-configuration.md" data-i18n="models.md">查看 Markdown 文档</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 001 ]</span>
+          <span>Provider types</span>
+        </div>
+        <div class="feature-list doc-card-grid">
+          <div class="feature-list-item">
+            <h4>OpenAI-compatible</h4>
+            <p data-i18n="models.compatBody">DeepSeek、GLM、本地网关，或任何兼容 <code>/chat/completions</code> 的服务。需要 API URL、Model ID 和 API key。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>OpenAI Responses</h4>
+            <p data-i18n="models.respBody">通过 <code>/v1/responses</code> 使用 OpenAI reasoning / tool-call 模型。需要 API URL、Model ID 和 API key。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>Anthropic API</h4>
+            <p data-i18n="models.anthBody">通过 <code>/v1/messages</code> 使用 Claude API。需要 API URL、Model ID 和 API key。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>Keyring + SQLite</h4>
+            <p data-i18n="models.keyBody">API key 存入系统 keyring；profile 名称、provider、URL、模型 ID 和能力标注存入项目的 <code>.wisp/wisp.sqlite</code>。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 002 ]</span>
+          <span>Fields</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="models.fieldsHeading">常用字段</h2>
+          <p data-i18n="models.fieldsLead">桌面版在 Settings -> Models 中配置。多个 profile 可以并存，随时切换 active profile。</p>
+        </div>
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>适用后端</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Display name</td>
+                <td>全部</td>
+                <td>在 UI 中显示的 profile 名称。</td>
+              </tr>
+              <tr>
+                <td>Provider</td>
+                <td>全部</td>
+                <td>选择 OpenAI-compatible、OpenAI Responses 或 Anthropic。</td>
+              </tr>
+              <tr>
+                <td>Model ID</td>
+                <td>全部</td>
+                <td>远程 API 的模型名。</td>
+              </tr>
+              <tr>
+                <td>API URL / API key</td>
+                <td>API provider</td>
+                <td>远程 API 的 base URL 和密钥。无需追加 <code>/v1</code>、<code>/chat/completions</code>、<code>/responses</code> 或 <code>/v1/messages</code>；Wisp 会根据 provider 自动补全请求路径，并为 OpenAI 兼容服务探测常见路径。桌面版密钥不写入 SQLite。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 003 ]</span>
+          <span>CLI</span>
+        </div>
+        <div class="section-head">
+          <h2>Headless CLI</h2>
+          <p><code>wisp-science</code> headless CLI 使用环境变量配置远程 API provider。</p>
+        </div>
+        <div class="feature-visual">
+          <pre>export WISP_PROVIDER=openai
+export WISP_API_URL=https://api.deepseek.com
+export WISP_MODEL=deepseek-chat
+export WISP_API_KEY=&lt;your provider key&gt;</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="assets/i18n.js"></script>
+</body>
+</html>

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="home">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science — 开源、本地优先的 Windows / macOS / Linux 科研 Agent 工作台。对接任意 LLM，运行 Python / R，调用 80+ 科研数据库与 34 个内置 SKILL。">
+  <title>Wisp Science | 开源科学计算 Agent</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="#top">
+        <img src="assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="#features" data-i18n="nav.features">功能</a>
+        <a href="#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="#stack" data-i18n="nav.stack">生态</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container">
+        <div class="eyebrow" data-i18n="hero.eyebrow">开源 · 本地优先 · Windows / macOS / Linux · v1.5.0</div>
+        <h1 data-i18n-html="hero.title">严谨科研的<br>本地 Agent 工作台</h1>
+        <p class="lead" data-i18n="hero.lead">
+          Wisp Science 在本地运行分析、检索数据库、调用 Python / R 与 MCP 工具，从数据整理到报告输出全程可追溯——把时间留给科学本身。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest" data-i18n="hero.download">下载桌面安装包</a>
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science#build--run" data-i18n="hero.source">从源码构建</a>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+          <div class="hero-mock">
+            <aside class="mock-sidebar">
+              <div class="mock-logo">
+                <img src="assets/logo.svg" alt="">
+                wisp-science
+              </div>
+              <div class="mock-nav-item active">New chat</div>
+              <div class="mock-nav-item">CRISPR screen</div>
+              <div class="mock-nav-item">Enzyme engineering</div>
+              <div class="mock-nav-item">Settings</div>
+            </aside>
+            <div class="mock-chat">
+              <div class="mock-bubble user" data-i18n="hero.mockUser">检索 PubMed 上 CRISPR 筛选的最新方法，并画一张流程图。</div>
+              <div class="mock-bubble assistant" data-i18n="hero.mockAssistant">已调用 mcp_pubmed 检索 12 篇文献，生成 Markdown 报告与 Python 绘图代码。表格与公式已提取为 artifact。</div>
+            </div>
+            <aside class="mock-artifacts">
+              <h4>Artifacts</h4>
+              <div class="mock-chip"><strong>Table 1</strong><span>12 rows · literature summary</span></div>
+              <div class="mock-chip"><strong>figure_flow.py</strong><span>matplotlib · reproducible</span></div>
+              <div class="mock-chip"><strong>Equation 2</strong><span>LaTeX · KaTeX preview</span></div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trusted" aria-labelledby="trusted-heading">
+      <div class="container trusted-inner">
+        <h2 id="trusted-heading" data-i18n="trusted.heading">Wisp Science 用户来自高校与科研团队</h2>
+        <div class="trusted-marquee">
+          <ul class="trusted-track" data-i18n-aria="trusted.aria" aria-label="Wisp Science 用户所在团队">
+            <li><img src="assets/trusted-logos/cornell.png" alt=""><span>Cornell University</span></li>
+            <li><img src="assets/trusted-logos/michigan.png" alt=""><span>University of Michigan</span></li>
+            <li><img src="assets/trusted-logos/ucla.png" alt=""><span>UCLA</span></li>
+            <li><img src="assets/trusted-logos/yale.svg" alt=""><span>Yale University</span></li>
+            <li><img src="assets/trusted-logos/tsinghua.svg" alt=""><span>Tsinghua University</span></li>
+            <li><img src="assets/trusted-logos/zhejiang.svg" alt=""><span>Zhejiang University</span></li>
+            <li><img src="assets/trusted-logos/washu.png" alt=""><span>Washington University in St. Louis</span></li>
+            <li><img src="assets/trusted-logos/slu.png" alt=""><span>Saint Louis University</span></li>
+            <li><img src="assets/trusted-logos/sjtu.svg" alt=""><span>Shanghai Jiao Tong University</span></li>
+            <li><img src="assets/trusted-logos/pku.svg" alt=""><span>Peking University</span></li>
+            <li><img src="assets/trusted-logos/cas.svg" alt=""><span>Chinese Academy of Sciences</span></li>
+            <li><img src="assets/trusted-logos/meduniwien.svg" alt=""><span>Medical University of Vienna</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/cornell.png" alt=""><span>Cornell University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/michigan.png" alt=""><span>University of Michigan</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/ucla.png" alt=""><span>UCLA</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/yale.svg" alt=""><span>Yale University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/tsinghua.svg" alt=""><span>Tsinghua University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/zhejiang.svg" alt=""><span>Zhejiang University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/washu.png" alt=""><span>Washington University in St. Louis</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/slu.png" alt=""><span>Saint Louis University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/sjtu.svg" alt=""><span>Shanghai Jiao Tong University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/pku.svg" alt=""><span>Peking University</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/cas.svg" alt=""><span>Chinese Academy of Sciences</span></li>
+            <li aria-hidden="true"><img src="assets/trusted-logos/meduniwien.svg" alt=""><span>Medical University of Vienna</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="voices" aria-labelledby="voices-heading">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 001b ]</span>
+          <span data-i18n="voices.kicker">From real research questions</span>
+        </div>
+        <div class="section-head">
+          <h2 id="voices-heading" data-i18n="voices.heading">他们这样用 Wisp Science</h2>
+          <p data-i18n="voices.lead">不是一句“帮我分析”，而是把手头真实、具体的科研任务交给它继续推进。</p>
+        </div>
+        <div class="voice-grid">
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q1">“能不能先帮我把这批单细胞数据做完 QC，再看看这几个 cluster 到底是什么细胞？每一步的参数和图都留下来，我明天组会要讲。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-1" aria-hidden="true"></i><span><strong data-i18n="voices.role1">生物信息方向博士生</strong><span data-i18n="voices.a1">以前最怕中途改参数，现在可以沿着同一段对话接着跑，图、代码和判断也都找得到。</span></span></figcaption>
+          </figure>
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q2">“把最近五年和这个靶点有关的临床前研究梳理一下。别只给结论，把检索来源、相互矛盾的结果和还缺什么证据一起列出来。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-2" aria-hidden="true"></i><span><strong data-i18n="voices.role2">药物研发团队研究员</strong><span data-i18n="voices.a2">它更像一个愿意把依据摊开的研究搭档，而不是给我一段看起来很确定的摘要。</span></span></figcaption>
+          </figure>
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q3">“这个蛋白的几个突变位点可能影响稳定性吗？先查数据库和文献，再给我一个能在本地复现的分析方案，不要动原始数据。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-3" aria-hidden="true"></i><span><strong data-i18n="voices.role3">结构生物学研究者</strong><span data-i18n="voices.a3">数据留在电脑上很重要；更省心的是检索、分析和最后的 Methods 草稿能在一个项目里串起来。</span></span></figcaption>
+          </figure>
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q4">“我把 20 篇 PDF 放进项目了。能按实验体系整理它们各自用了什么对照吗？有数字对不上的地方先标出来，别替作者猜。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-4" aria-hidden="true"></i><span><strong data-i18n="voices.role4">分子生物学博士后</strong><span data-i18n="voices.a4">做文献表格时最有用的不是快，而是它会把出处带回来，我能立刻核对原文。</span></span></figcaption>
+          </figure>
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q5">“这份代谢组结果先别急着解释。帮我检查缺失值、批次效应和异常样本，再把你建议的统计步骤写成一份可重复运行的脚本。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-5" aria-hidden="true"></i><span><strong data-i18n="voices.role5">转化医学实验室成员</strong><span data-i18n="voices.a5">它不会只扔给我一张漂亮图，前面的数据检查和后面的脚本都在，交接给同事也方便。</span></span></figcaption>
+          </figure>
+          <figure class="voice-card">
+            <blockquote data-i18n="voices.q6">“根据这组候选分子查一下 ChEMBL 和 PubChem，活性、选择性和已知风险分开列。最后告诉我下一轮最值得补哪三个实验。”</blockquote>
+            <figcaption><i class="voice-avatar avatar-6" aria-hidden="true"></i><span><strong data-i18n="voices.role6">计算化学研究员</strong><span data-i18n="voices.a6">数据库检索和本地分析不用来回切工具，尤其适合先把问题收敛，再决定昂贵的实验往哪做。</span></span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+    <section id="features">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 002 ]</span>
+          <span data-i18n="features.kicker">Built for scientific research</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="features.heading">为科研而生</h2>
+          <p data-i18n="features.lead">独立开源的 Rust/Tauri 科研工作台：Agent 核心、生物工具链与桌面 UI 全部本地运行，数据不出机器。</p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature-card">
+            <div>
+              <h3 data-i18n="features.artTitle">科学产物，完整可追溯</h3>
+              <p data-i18n="features.artBody">对话中的表格、代码块、LaTeX 公式与文件路径自动提取为 artifact，侧边栏即时预览。Markdown 渲染支持 KaTeX 与代码高亮。</p>
+            </div>
+            <div class="feature-visual">
+              <pre data-i18n="features.artPre">{{artifact:abc123}}
+→ Table · 8 rows × 4 cols
+→ figure_umap.py · 42 lines
+→ $\hat{\beta}$ · LaTeX equation
+
+每个 artifact 绑定生成它的对话上下文，
+便于复现、编辑与版本回溯。</pre>
+            </div>
+          </article>
+
+          <article class="feature-card reverse">
+            <div>
+              <h3 data-i18n="features.pyTitle">持久 Python / R 内核</h3>
+              <p data-i18n-html="features.pyBody">长驻内核子进程保持变量与 DataFrame 在内存中，且按会话隔离。跨轮次迭代分析无需重复加载数据，并行会话也不会互相覆盖状态。</p>
+            </div>
+            <div class="feature-visual">
+              <pre data-i18n="features.pyPre">>>> import scanpy as sc
+>>> adata = sc.read_h5ad("pbmc.h5ad")
+>>> adata.shape
+(2700, 32738)
+
+# 变量在后续 tool call 中仍然可用
+>>> sc.pp.neighbors(adata)
+>>> sc.tl.umap(adata)</pre>
+            </div>
+          </article>
+
+          <article class="feature-card">
+            <div>
+              <h3 data-i18n="features.skillTitle">34 个内置 SKILL 工作流</h3>
+              <p data-i18n="features.skillBody">从文献综述、分析模块、作图、Python/R 环境到远程 SSH 计算，开箱即用。</p>
+            </div>
+            <div class="feature-visual">
+              <pre data-i18n="features.skillPre">skills/
+├─ literature-review/
+├─ analysis-workflow/
+├─ remote-compute-ssh/
+├─ figure-composer/
+└─ paper-narrative/ …
+
+Agent 通过 use_skill 工具按需加载 SKILL.md</pre>
+            </div>
+          </article>
+        </div>
+
+        <div class="feature-list">
+          <div class="feature-list-item">
+            <h4 data-i18n="features.llmTitle">任意 LLM 后端</h4>
+            <p data-i18n-html="features.llmBody">支持 OpenAI 兼容、OpenAI Responses、Anthropic API，以及本地 <a href="acp-agents.html">ACP Agent</a>。<a href="model-configuration.html">查看 HTTP 模型配置</a>。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="features.ctxTitle">三层上下文压缩</h4>
+            <p data-i18n="features.ctxBody">完整历史先归档，安全裁剪 tool/图片噪声；必须移除语义轮次时，先基于原历史生成增量摘要检查点，并保留有界近期上下文。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="features.sqlTitle">SQLite 持久化</h4>
+            <p data-i18n="features.sqlBody">项目、会话帧、消息与 artifact 写入本地数据库，重启应用完整恢复历史。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 002b ]</span>
+          <span data-i18n="local.kicker">Works wherever your data lives</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="local.heading">数据留在本地</h2>
+          <p data-i18n="local.lead">Windows（WebView2）、macOS（Apple Silicon / Intel 分架构）与 Linux 桌面，或 headless CLI；Python 环境与 MCP 服务器在首次启动时自动配置。</p>
+        </div>
+        <div class="feature-list">
+          <div class="feature-list-item">
+            <h4 data-i18n="local.pkgTitle">自包含安装包</h4>
+            <p data-i18n="local.pkgBody">skills、Python、MCP 与 demo 会话打包进 Windows MSI/NSIS、macOS dmg 与 Linux .deb / AppImage，无需源码树。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="local.mcpTitle">统一 bio MCP</h4>
+            <p data-i18n="local.mcpBody">默认启动 mcp_bio，约 240 个工具覆盖 PubMed、UniProt、ChEMBL 等 80+ 数据库。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4 data-i18n="local.remoteTitle">远程计算</h4>
+            <p data-i18n="local.remoteBody">SKILL 支持 SSH、WSL 与 GPU 主机；Agent 可编写并提交带实时日志的长 Run。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="usecases" class="usecases">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 003 ]</span>
+          <span data-i18n="usecases.kicker">How researchers use Wisp Science</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="usecases.heading">研究者如何使用</h2>
+          <p data-i18n="usecases.lead">预置生命科学多领域工作流；跨学科项目可在同一会话中串联文献、分析与可视化。</p>
+        </div>
+
+        <div class="tab-bar" role="tablist">
+          <button class="tab-btn active" data-tab="tab-scrna" role="tab" data-i18n="usecases.tabScrna">单细胞 RNA-seq</button>
+          <button class="tab-btn" data-tab="tab-protein" role="tab" data-i18n="usecases.tabProtein">蛋白结构</button>
+          <button class="tab-btn" data-tab="tab-chem" role="tab" data-i18n="usecases.tabChem">化学信息学</button>
+          <button class="tab-btn" data-tab="tab-lit" role="tab" data-i18n="usecases.tabLit">文献与写作</button>
+        </div>
+
+        <div id="tab-scrna" class="tab-panel active" role="tabpanel">
+          <div>
+            <h3 data-i18n="usecases.scrnaTitle">单细胞与转录组分析</h3>
+            <p data-i18n-html="usecases.scrnaBody">用 analysis-workflow 把 QC、聚类、注释收成可复现模块；在持久 Python 内核中完成 Scanpy 流程与 UMAP 可视化。</p>
+            <ul>
+              <li data-i18n="usecases.scrnaLi1">调用 MCP 查询 GEO / CellxGene 元数据</li>
+              <li data-i18n="usecases.scrnaLi2">表格与图形自动进入 artifact 面板</li>
+              <li data-i18n="usecases.scrnaLi3">代码与对话绑定，便于复现</li>
+            </ul>
+          </div>
+          <div class="prompt-mock">
+            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
+            <span data-i18n="usecases.scrnaPrompt">对 PBMC 3k 数据做标准 Scanpy 流程，标注 major cell types，并导出 marker 基因热图。</span>
+          </div>
+        </div>
+
+        <div id="tab-protein" class="tab-panel" role="tabpanel">
+          <div>
+            <h3 data-i18n="usecases.proteinTitle">蛋白结构与序列</h3>
+            <p data-i18n="usecases.proteinBody">从 UniProt / PDB 拉取序列与实验结构，结合文献综述与作图，生成可引用的位点表和 Methods 草稿。</p>
+            <ul>
+              <li data-i18n="usecases.proteinLi1">从 UniProt / PDB MCP 拉取序列与结构</li>
+              <li data-i18n="usecases.proteinLi2">3D 结构查看器在 Roadmap 中</li>
+              <li data-i18n="usecases.proteinLi3">与文献综述 SKILL 串联假设生成</li>
+            </ul>
+          </div>
+          <div class="prompt-mock">
+            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
+            <span data-i18n="usecases.proteinPrompt">获取 TP53 预测结构，叠加 ClinVar 致病突变位点，并生成 Methods 段落草稿。</span>
+          </div>
+        </div>
+
+        <div id="tab-chem" class="tab-panel" role="tabpanel">
+          <div>
+            <h3 data-i18n="usecases.chemTitle">化学信息学与分子设计</h3>
+            <p data-i18n="usecases.chemBody">通过 ChEMBL、PubChem MCP 检索活性数据，计算理化性质与相似性，用 figure-composer 出 SAR 图。</p>
+            <ul>
+              <li data-i18n="usecases.chemLi1">计算理化性质与相似性</li>
+              <li data-i18n="usecases.chemLi2">右侧面板预览 SMILES / MOL / SDF（RDKit）</li>
+              <li data-i18n="usecases.chemLi3">figure-composer 统一出图风格</li>
+            </ul>
+          </div>
+          <div class="prompt-mock">
+            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
+            <span data-i18n="usecases.chemPrompt">检索靶点 EGFR 的 IC50 数据，筛选 oral bioavailability 较好的候选，并绘制 SAR 热力图。</span>
+          </div>
+        </div>
+
+        <div id="tab-lit" class="tab-panel" role="tabpanel">
+          <div>
+            <h3 data-i18n="usecases.litTitle">文献检索与稿件草稿</h3>
+            <p data-i18n="usecases.litBody">literature-review、paper-narrative、pdf-explore SKILL 帮助从 PDF 到结构化综述与叙事。</p>
+            <ul>
+              <li data-i18n="usecases.litLi1">PubMed / Semantic Scholar MCP 检索</li>
+              <li data-i18n="usecases.litLi2">Markdown + LaTeX 实时预览</li>
+              <li data-i18n="usecases.litLi3">indication-dossier 适应症档案模板</li>
+            </ul>
+          </div>
+          <div class="prompt-mock">
+            <div class="label" data-i18n="usecases.promptLabel">示例提示</div>
+            <span data-i18n="usecases.litPrompt">基于附件 PDF 写一段 Discussion，附引用列表，并检查数字是否与表格一致。</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 003b ]</span>
+          <span data-i18n="demo.kicker">See it in action</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="demo.heading">内置 Demo 会话</h2>
+          <p data-i18n="demo.lead">桌面应用「Open demo」可打开只读示例：CRISPR 筛选、酶工程、极端微生物与免疫治疗——无需 API 额度即可感受工作流。</p>
+        </div>
+        <div class="demo-grid">
+          <article class="demo-card">
+            <h4 data-i18n="demo.crisprTitle">CRISPR Screen</h4>
+            <p data-i18n="demo.crisprBody">从 raw counts 到 hit calling 与可视化报告的完整 Agent 轨迹。</p>
+          </article>
+          <article class="demo-card">
+            <h4 data-i18n="demo.enzymeTitle">Enzyme Engineering</h4>
+            <p data-i18n="demo.enzymeBody">序列分析、突变建议与活性预测的多轮工具调用示例。</p>
+          </article>
+          <article class="demo-card">
+            <h4 data-i18n="demo.extTitle">Extremophile</h4>
+            <p data-i18n="demo.extBody">宏基因组检索与功能注释的跨数据库工作流。</p>
+          </article>
+          <article class="demo-card">
+            <h4 data-i18n="demo.immTitle">Immunotherapy</h4>
+            <p data-i18n="demo.immBody">肿瘤免疫相关文献整合与假设生成演示。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="stack">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 004 ]</span>
+          <span data-i18n="stack.kicker">Works with your stack</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="stack.heading">对接你的工具链</h2>
+          <p data-i18n="stack.lead">MCP 协议连接生物数据库与自定义服务器；SKILL.md 扩展可复用流水线。Agent 把它们当作一等公民工具调用。</p>
+        </div>
+        <div class="stack-grid">
+          <div class="stack-item">bio-tools MCP<span>~240 tools · 80+ DBs</span></div>
+          <div class="stack-item">SKILL.md<span data-i18n="stack.skill">34 bundled workflows</span></div>
+          <div class="stack-item">Python / R<span data-i18n="stack.python">uv-managed venv · isolated R</span></div>
+          <div class="stack-item">Filesystem tools<span>read / write / shell</span></div>
+          <div class="stack-item">OpenAI API<span>compatible endpoints</span></div>
+          <div class="stack-item">Anthropic API<span>Claude models</span></div>
+          <div class="stack-item">SSH / WSL<span>remote compute SKILLs</span></div>
+          <div class="stack-item">MCP Apps<span>interactive UI from MCP tools</span></div>
+        </div>
+        <p style="margin-top:32px;text-align:center;">
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/tree/main/mcp-servers" data-i18n="stack.browse">浏览 MCP 服务器</a>
+        </p>
+      </div>
+    </section>
+
+    <section id="faq">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 005 ]</span>
+          <span>FAQs</span>
+        </div>
+        <div class="section-head">
+          <h2 data-i18n="faq.heading">常见问题</h2>
+        </div>
+        <div class="faq-list">
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q1">Wisp Science 是新模型吗？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a1"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q2">与通用 AI 助手有何不同？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a2"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q3">研究数据是否私密？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a3"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q4">支持哪些平台？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a4"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q5">macOS 为什么反复弹出钥匙串密码框？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n-html="faq.a5"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q6">需要什么前置依赖？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a6"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q7">Wisp Science 是独立项目吗？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a7"></div>
+          </div>
+          <div class="faq-item">
+            <button class="faq-q" type="button">
+              <span data-i18n="faq.q8">当前版本稳定吗？</span>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <div class="faq-a" data-i18n="faq.a8"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="#top">
+        <img src="assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+
+  <script src="assets/i18n.js"></script>
+  <script src="assets/main.js"></script>
+</body>
+</html>

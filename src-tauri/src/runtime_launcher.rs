@@ -1,0 +1,1113 @@
+//! ExecutionContext-aware launcher for attached interactive runtimes.
+
+use crate::{
+    run_context::{ProcessRunRunner, RunCommand, RunCommandOutput, RunCommandRunner},
+    ssh_hosts::SshConnection,
+};
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+use tauri::State;
+use wisp_runtime::{
+    find_rscript, KernelClient, KernelWriteScope, LaunchedRuntime, PythonEnv, RuntimeKey,
+    RuntimeLanguage, RuntimeLauncher, RuntimeMetadata, PROTOCOL_VERSION,
+};
+
+const DEPLOY_TIMEOUT: Duration = Duration::from_secs(30);
+const PRESERVED_CONFIG_KEYS: [&str; 4] = [
+    "python_executable",
+    "python_path",
+    "rscript_executable",
+    "rscript_path",
+];
+
+pub(crate) fn preserve_interpreter_config(existing: &str, replacement: &str) -> Result<String> {
+    let existing = json_object(existing, "existing execution context config")?;
+    let mut replacement = json_object(replacement, "replacement execution context config")?;
+    let target = replacement
+        .as_object_mut()
+        .expect("json_object always returns an object");
+    for key in PRESERVED_CONFIG_KEYS {
+        if let Some(value) = existing.get(key) {
+            target.insert(key.into(), value.clone());
+        }
+    }
+    Ok(serde_json::to_string(&replacement)?)
+}
+
+pub async fn save_interpreter_config(
+    store: &wisp_store::Store,
+    context_id: &str,
+    python_executable: &str,
+    rscript_executable: &str,
+) -> Result<wisp_store::ExecutionContext> {
+    update_interpreter_config(store, context_id, move |object| {
+        set_interpreter(
+            object,
+            "python_executable",
+            "python_path",
+            python_executable,
+        )?;
+        set_interpreter(
+            object,
+            "rscript_executable",
+            "rscript_path",
+            rscript_executable,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn save_runtime_interpreter(
+    store: &wisp_store::Store,
+    context_id: &str,
+    language: RuntimeLanguage,
+    executable: &str,
+) -> Result<wisp_store::ExecutionContext> {
+    update_interpreter_config(store, context_id, move |object| match language {
+        RuntimeLanguage::Python => {
+            set_interpreter(object, "python_executable", "python_path", executable)
+        }
+        RuntimeLanguage::R => {
+            set_interpreter(object, "rscript_executable", "rscript_path", executable)
+        }
+    })
+    .await
+}
+
+async fn update_interpreter_config(
+    store: &wisp_store::Store,
+    context_id: &str,
+    update: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<()> + Send,
+) -> Result<wisp_store::ExecutionContext> {
+    let mut context = store
+        .get_execution_context(context_id)
+        .await?
+        .ok_or_else(|| anyhow!("Execution context not found: {context_id}"))?;
+    let mut config = json_object(&context.config_json, "execution context config")?;
+    let object = config
+        .as_object_mut()
+        .expect("json_object always returns an object");
+    update(object)?;
+    context.config_json = serde_json::to_string(&config)?;
+    context.updated_at = chrono::Utc::now().timestamp();
+    store.upsert_execution_context(&context).await?;
+    Ok(context)
+}
+
+fn set_interpreter(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    legacy_key: &str,
+    value: &str,
+) -> Result<()> {
+    config.remove(legacy_key);
+    let value = value.trim();
+    if value.is_empty() {
+        config.remove(key);
+        return Ok(());
+    }
+    validate_context_value(key, value).map_err(anyhow::Error::msg)?;
+    config.insert(key.into(), serde_json::Value::String(value.into()));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_execution_context_interpreters(
+    state: State<'_, crate::AppState>,
+    context_id: String,
+    python_executable: String,
+    rscript_executable: String,
+) -> Result<wisp_store::ExecutionContext, String> {
+    save_interpreter_config(
+        &state.store,
+        &context_id,
+        &python_executable,
+        &rscript_executable,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+pub struct TauriRuntimeLauncher {
+    store: wisp_store::Store,
+    app_data: PathBuf,
+    python_worker: PathBuf,
+    r_worker: PathBuf,
+    envs: Vec<(String, String)>,
+    runner: Arc<dyn RunCommandRunner>,
+}
+
+impl TauriRuntimeLauncher {
+    pub fn new(
+        store: wisp_store::Store,
+        app_data: PathBuf,
+        python_worker: PathBuf,
+        r_worker: PathBuf,
+        envs: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            store,
+            app_data,
+            python_worker,
+            r_worker,
+            envs,
+            runner: Arc::new(ProcessRunRunner),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_runner(mut self, runner: Arc<dyn RunCommandRunner>) -> Self {
+        self.runner = runner;
+        self
+    }
+}
+
+#[async_trait]
+impl RuntimeLauncher for TauriRuntimeLauncher {
+    async fn launch(&self, key: &RuntimeKey, project_root: &Path) -> Result<LaunchedRuntime> {
+        let context = self
+            .store
+            .get_execution_context(&key.context_id)
+            .await?
+            .ok_or_else(|| anyhow!("Execution context not found: {}", key.context_id))?;
+        if context.kind == wisp_store::ExecutionContextKind::Ssh {
+            crate::ssh_hosts::require_managed_ssh_ready(&context).map_err(anyhow::Error::msg)?;
+        }
+        let (interpreter, worker, language) = match key.language {
+            RuntimeLanguage::Python => (
+                resolve_python_interpreter(&context, &self.app_data)?,
+                &self.python_worker,
+                "python",
+            ),
+            RuntimeLanguage::R => (local_direct_rscript(&context)?, &self.r_worker, "r"),
+        };
+        if !worker.is_file() {
+            return Err(anyhow!(
+                "{} runtime worker not found at {}",
+                language,
+                worker.display()
+            ));
+        }
+        let remote_worker = if context.kind == wisp_store::ExecutionContextKind::Local {
+            None
+        } else {
+            let source = tokio::fs::read_to_string(worker).await.map_err(|error| {
+                anyhow!(
+                    "read {language} runtime worker {}: {error}",
+                    worker.display()
+                )
+            })?;
+            Some(
+                ensure_remote_worker(&context, key.language, &source, self.runner.as_ref())
+                    .await
+                    .map_err(|error| {
+                        if context.kind == wisp_store::ExecutionContextKind::Ssh
+                            && crate::ssh_guard::is_authentication_failure(&error)
+                        {
+                            crate::ssh_guard::record_failure(&context.id, &error);
+                        }
+                        anyhow::Error::msg(error)
+                    })?,
+            )
+        };
+        let command = build_attached_command(
+            &context,
+            key.language,
+            &interpreter,
+            worker,
+            remote_worker.as_deref(),
+            project_root,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let mut envs = launch_envs(
+            &context,
+            key.language,
+            &interpreter,
+            &self.envs,
+            crate::models::service_env(),
+        );
+        let ssh_auth_envs = if context.kind == wisp_store::ExecutionContextKind::Ssh {
+            let connection =
+                SshConnection::from_execution_context(&context).map_err(anyhow::Error::msg)?;
+            crate::ssh_hosts::auth_envs_for_connection(&connection).map_err(anyhow::Error::msg)?
+        } else {
+            Vec::new()
+        };
+        envs.extend(ssh_auth_envs.iter().cloned());
+        let mut client = match KernelClient::spawn_command(
+            &command.program,
+            &command.args,
+            envs.as_slice(),
+            command.cwd.as_deref(),
+            language,
+        )
+        .await
+        {
+            Ok(client) => {
+                crate::ssh_hosts::cleanup_password_auth_env(&ssh_auth_envs);
+                if context.kind == wisp_store::ExecutionContextKind::Ssh {
+                    crate::ssh_guard::record_success(&context.id);
+                }
+                client
+            }
+            Err(error) => {
+                crate::ssh_hosts::cleanup_password_auth_env(&ssh_auth_envs);
+                if context.kind == wisp_store::ExecutionContextKind::Ssh {
+                    let detail = error.to_string();
+                    if crate::ssh_guard::is_authentication_failure(&detail) {
+                        crate::ssh_guard::record_failure(&context.id, &detail);
+                    }
+                }
+                return Err(error);
+            }
+        };
+        if let Some(scope) = kernel_write_scope(&context, key.language, project_root) {
+            client.configure_write_scope(&scope).await?;
+        }
+        let ready = client.ready().clone();
+        Ok(LaunchedRuntime::new(
+            Box::new(client),
+            RuntimeMetadata {
+                interpreter: Some(interpreter),
+                version: Some(ready.version),
+                process_id: Some(ready.pid),
+            },
+        ))
+    }
+}
+
+fn kernel_write_scope(
+    context: &wisp_store::ExecutionContext,
+    language: RuntimeLanguage,
+    project_root: &Path,
+) -> Option<KernelWriteScope> {
+    if language != RuntimeLanguage::Python {
+        return None;
+    }
+    let root = match context.kind {
+        wisp_store::ExecutionContextKind::Local => project_root.to_string_lossy().into_owned(),
+        // The WSL launch command enters the translated project root before
+        // starting the worker, so `.` is already the correct in-distro path.
+        wisp_store::ExecutionContextKind::Wsl => ".".into(),
+        wisp_store::ExecutionContextKind::Ssh => return None,
+    };
+    Some(KernelWriteScope {
+        root,
+        skip_dirs: wisp_core::provenance::SNAPSHOT_SKIP_DIRS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AttachedCommand {
+    program: PathBuf,
+    args: Vec<OsString>,
+    cwd: Option<PathBuf>,
+}
+
+fn resolve_python_interpreter(
+    context: &wisp_store::ExecutionContext,
+    app_data: &Path,
+) -> Result<String> {
+    let config = json_object(&context.config_json, "execution context config")?;
+    let capabilities = json_object(&context.capabilities_json, "execution context capabilities")?;
+    if let Some(interpreter) = first_string(&config, &["python_executable", "python_path"])? {
+        return Ok(interpreter);
+    }
+    if let Some(interpreter) = first_string(&capabilities, &["python_executable"])? {
+        return Ok(interpreter);
+    }
+    if context.kind == wisp_store::ExecutionContextKind::Local {
+        return Ok(PythonEnv::managed(app_data)
+            .python()
+            .to_string_lossy()
+            .into_owned());
+    }
+    Err(anyhow!(
+        "Python interpreter is unknown for {}; probe the context or configure python_executable",
+        context.id
+    ))
+}
+
+fn resolve_r_interpreter(context: &wisp_store::ExecutionContext) -> Result<String> {
+    let config = json_object(&context.config_json, "execution context config")?;
+    let capabilities = json_object(&context.capabilities_json, "execution context capabilities")?;
+    if let Some(interpreter) = first_string(&config, &["rscript_executable", "rscript_path"])? {
+        ensure_jsonlite_available(context, &capabilities, &interpreter)?;
+        return Ok(interpreter);
+    }
+    if let Some(interpreter) = first_string(&capabilities, &["rscript_executable"])? {
+        ensure_jsonlite_available(context, &capabilities, &interpreter)?;
+        return Ok(interpreter);
+    }
+    if context.kind == wisp_store::ExecutionContextKind::Local {
+        return find_rscript()
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                anyhow!(
+                    "Rscript not found on PATH; configure the R interpreter for context '{}'",
+                    context.id
+                )
+            });
+    }
+    Err(anyhow!(
+        "Rscript interpreter is unknown for {}; probe the context or configure rscript_executable",
+        context.id
+    ))
+}
+
+/// Environment for one launched worker, over and above what the child inherits.
+///
+/// A local interpreter that lives inside a conda/pixi prefix needs that prefix
+/// on the child's `PATH` to load its own shared libraries; the host environment
+/// is never touched. API credentials stay limited to local Python, and remote
+/// contexts get neither: their environment is the remote shell's business.
+fn launch_envs(
+    context: &wisp_store::ExecutionContext,
+    language: RuntimeLanguage,
+    interpreter: &str,
+    base: &[(String, String)],
+    service: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    if context.kind != wisp_store::ExecutionContextKind::Local {
+        return Vec::new();
+    }
+    let mut envs = wisp_runtime::conda_prefix_envs(Path::new(interpreter));
+    if language == RuntimeLanguage::Python {
+        for (name, value) in base.iter().cloned().chain(service) {
+            upsert_env(&mut envs, name, value);
+        }
+    }
+    envs
+}
+
+fn upsert_env(envs: &mut Vec<(String, String)>, name: String, value: String) {
+    match envs.iter_mut().find(|(current, _)| current == &name) {
+        Some((_, current)) => *current = value,
+        None => envs.push((name, value)),
+    }
+}
+
+/// Resolve the configured `Rscript`, then on a local Windows context launch the
+/// real binary behind the `bin\Rscript.exe` architecture shim. Remote contexts
+/// keep the configured path: their filesystem layout is not ours to inspect.
+fn local_direct_rscript(context: &wisp_store::ExecutionContext) -> Result<String> {
+    let configured = resolve_r_interpreter(context)?;
+    if context.kind != wisp_store::ExecutionContextKind::Local {
+        return Ok(configured);
+    }
+    Ok(wisp_runtime::direct_rscript(Path::new(&configured))
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn ensure_jsonlite_available(
+    context: &wisp_store::ExecutionContext,
+    capabilities: &serde_json::Value,
+    interpreter: &str,
+) -> Result<()> {
+    let probed_interpreter = capabilities
+        .get("rscript_executable")
+        .and_then(serde_json::Value::as_str);
+    if probed_interpreter == Some(interpreter)
+        && capabilities
+            .get("r_jsonlite")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    {
+        return Err(anyhow!(
+            "R package 'jsonlite' is not available in {}; install it in the selected R environment",
+            context.id
+        ));
+    }
+    Ok(())
+}
+
+fn build_attached_command(
+    context: &wisp_store::ExecutionContext,
+    language: RuntimeLanguage,
+    interpreter: &str,
+    local_worker: &Path,
+    remote_worker: Option<&str>,
+    project_root: &Path,
+) -> Result<AttachedCommand, String> {
+    validate_context_value("runtime interpreter", interpreter)?;
+    match context.kind {
+        wisp_store::ExecutionContextKind::Local => Ok(AttachedCommand {
+            program: PathBuf::from(interpreter),
+            args: match language {
+                RuntimeLanguage::Python => vec![local_worker.as_os_str().to_os_string()],
+                RuntimeLanguage::R => vec![
+                    OsString::from("--vanilla"),
+                    local_worker.as_os_str().to_os_string(),
+                ],
+            },
+            cwd: Some(project_root.to_path_buf()),
+        }),
+        wisp_store::ExecutionContextKind::Wsl => {
+            let worker =
+                remote_worker.ok_or_else(|| "remote worker path is required".to_string())?;
+            let interpreter = shell_single_quote(interpreter);
+            let worker = remote_path_expression(worker)?;
+            let execute = match language {
+                RuntimeLanguage::Python => format!("exec {interpreter} {worker}",),
+                RuntimeLanguage::R => format!("exec {interpreter} --vanilla {worker}"),
+            };
+            let project_root = project_root.to_string_lossy();
+            validate_context_value("project root", &project_root)?;
+            let project_root = shell_single_quote(&project_root);
+            let script = format!(
+                "project_root=$(wslpath -a -u {project_root}) || {{ echo 'Wisp could not translate the project root for WSL' >&2; exit 125; }}\ncd \"$project_root\" || {{ echo 'Wisp could not enter the project root in WSL' >&2; exit 125; }}\n{execute}"
+            );
+            let distro = wsl_distro(context)?;
+            Ok(AttachedCommand {
+                program: PathBuf::from("wsl.exe"),
+                args: ["-d", &distro, "--", "sh", "-lc", &script]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                cwd: None,
+            })
+        }
+        wisp_store::ExecutionContextKind::Ssh => {
+            let worker =
+                remote_worker.ok_or_else(|| "remote worker path is required".to_string())?;
+            let workdir = runtime_workdir(context)?;
+            let interpreter = shell_single_quote(interpreter);
+            let worker = remote_path_expression(worker)?;
+            let script = match language {
+                RuntimeLanguage::Python => format!(
+                    "cd {} && exec {interpreter} {worker}",
+                    remote_path_expression(&workdir)?,
+                ),
+                RuntimeLanguage::R => format!(
+                    "cd {} && exec {interpreter} --vanilla {worker}",
+                    remote_path_expression(&workdir)?,
+                ),
+            };
+            let mut args = SshConnection::from_execution_context(context)?.ssh_args()?;
+            args.push(script);
+            Ok(AttachedCommand {
+                program: PathBuf::from("ssh"),
+                args: args.into_iter().map(OsString::from).collect(),
+                cwd: None,
+            })
+        }
+    }
+}
+
+async fn ensure_remote_worker(
+    context: &wisp_store::ExecutionContext,
+    language: RuntimeLanguage,
+    source: &str,
+    runner: &dyn RunCommandRunner,
+) -> Result<String, String> {
+    let checksum = wisp_sync::sha256_hex(source.as_bytes());
+    let (name, extension) = match language {
+        RuntimeLanguage::Python => ("python", "py"),
+        RuntimeLanguage::R => ("r", "R"),
+    };
+    let remote_path = format!(
+        "~/.wisp-science/runtime/{name}-v{}-{checksum}.{extension}",
+        PROTOCOL_VERSION
+    );
+    let check = runner
+        .run(
+            remote_command(
+                context,
+                &format!("check {name} runtime worker"),
+                checksum_script(&remote_path, &checksum),
+                None,
+            )?,
+            DEPLOY_TIMEOUT,
+        )
+        .await?;
+    if check.exit_code == 0 {
+        return Ok(remote_path);
+    }
+    let deploy = runner
+        .run(
+            remote_command(
+                context,
+                &format!("deploy {name} runtime worker"),
+                deploy_script(&remote_path, &checksum),
+                Some(source.to_string()),
+            )?,
+            DEPLOY_TIMEOUT,
+        )
+        .await?;
+    checked_command(&format!("{name} runtime worker deployment"), deploy)?;
+    Ok(remote_path)
+}
+
+fn remote_command(
+    context: &wisp_store::ExecutionContext,
+    label: &str,
+    script: String,
+    stdin: Option<String>,
+) -> Result<RunCommand, String> {
+    match context.kind {
+        wisp_store::ExecutionContextKind::Wsl => Ok(RunCommand {
+            context_id: context.id.clone(),
+            program: "wsl.exe".into(),
+            args: vec![
+                "-d".into(),
+                wsl_distro(context)?,
+                "--".into(),
+                "sh".into(),
+                "-lc".into(),
+                script,
+            ],
+            script: label.into(),
+            cwd: None,
+            stdin,
+            envs: Vec::new(),
+        }),
+        wisp_store::ExecutionContextKind::Ssh => {
+            let connection = SshConnection::from_execution_context(context)?;
+            let mut args = connection.ssh_args()?;
+            args.push(format!("sh -lc {}", shell_single_quote(&script)));
+            Ok(RunCommand {
+                context_id: context.id.clone(),
+                program: "ssh".into(),
+                args,
+                script: label.into(),
+                cwd: None,
+                stdin,
+                envs: crate::ssh_hosts::auth_envs_for_connection(&connection)?,
+            })
+        }
+        wisp_store::ExecutionContextKind::Local => {
+            Err("remote deployment requires WSL or SSH".into())
+        }
+    }
+}
+
+fn checksum_script(remote_path: &str, checksum: &str) -> String {
+    let path = remote_path_expression(remote_path).expect("generated runtime path is valid");
+    format!(
+        "hash_file() {{ if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | cut -d' ' -f1; else shasum -a 256 \"$1\" | cut -d' ' -f1; fi; }}; test -f {path} && test \"$(hash_file {path})\" = {}",
+        shell_single_quote(checksum)
+    )
+}
+
+fn deploy_script(remote_path: &str, checksum: &str) -> String {
+    let path = remote_path_expression(remote_path).expect("generated runtime path is valid");
+    format!(
+        "set -eu; dir=\"$HOME/.wisp-science/runtime\"; mkdir -p \"$dir\"; tmp={path}.tmp.$$; cat > \"$tmp\"; if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum \"$tmp\" | cut -d' ' -f1); else actual=$(shasum -a 256 \"$tmp\" | cut -d' ' -f1); fi; if test \"$actual\" != {}; then rm -f \"$tmp\"; exit 1; fi; chmod 600 \"$tmp\"; mv -f \"$tmp\" {path}",
+        shell_single_quote(checksum)
+    )
+}
+
+fn checked_command(label: &str, output: RunCommandOutput) -> Result<(), String> {
+    if output.exit_code == 0 {
+        return Ok(());
+    }
+    let detail = if output.stderr.trim().is_empty() {
+        output.stdout.trim()
+    } else {
+        output.stderr.trim()
+    };
+    Err(format!(
+        "{label} failed with exit {}: {detail}",
+        output.exit_code
+    ))
+}
+
+fn runtime_workdir(context: &wisp_store::ExecutionContext) -> Result<String, String> {
+    let config = json_object(&context.config_json, "execution context config")
+        .map_err(|error| error.to_string())?;
+    let capabilities = json_object(&context.capabilities_json, "execution context capabilities")
+        .map_err(|error| error.to_string())?;
+    first_string(&config, &["workdir", "default_workdir"])
+        .map_err(|error| error.to_string())?
+        .or(first_string(&capabilities, &["pwd", "home"]).map_err(|error| error.to_string())?)
+        .map_or_else(
+            || Ok("~".into()),
+            |value| {
+                validate_context_value("runtime workdir", &value)?;
+                Ok(value)
+            },
+        )
+}
+
+fn wsl_distro(context: &wisp_store::ExecutionContext) -> Result<String, String> {
+    let config = json_object(&context.config_json, "WSL context config")
+        .map_err(|error| error.to_string())?;
+    let distro = first_string(&config, &["distro"])
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| {
+            context
+                .id
+                .strip_prefix("wsl:")
+                .unwrap_or(&context.id)
+                .to_string()
+        });
+    validate_context_value("WSL distro", &distro)?;
+    Ok(distro)
+}
+
+fn json_object(value: &str, label: &str) -> Result<serde_json::Value> {
+    let value: serde_json::Value =
+        serde_json::from_str(value).map_err(|error| anyhow!("Invalid {label}: {error}"))?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(anyhow!("{label} must be a JSON object"))
+    }
+}
+
+fn first_string(value: &serde_json::Value, keys: &[&str]) -> Result<Option<String>> {
+    for key in keys {
+        match value.get(*key) {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
+                validate_context_value(key, value).map_err(anyhow::Error::msg)?;
+                return Ok(Some(value.clone()));
+            }
+            Some(serde_json::Value::String(_)) => {}
+            Some(_) => return Err(anyhow!("execution context field '{key}' must be a string")),
+        }
+    }
+    Ok(None)
+}
+
+fn validate_context_value(label: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.contains(['\0', '\n', '\r']) {
+        Err(format!(
+            "{label} must be non-empty and contain no line breaks"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn remote_path_expression(path: &str) -> Result<String, String> {
+    validate_context_value("remote path", path)?;
+    if path == "~" {
+        Ok("\"$HOME\"".into())
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        Ok(format!("\"$HOME\"/{}", shell_single_quote(rest)))
+    } else {
+        Ok(shell_single_quote(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::VecDeque, sync::Mutex};
+
+    struct FakeRunner {
+        outputs: Mutex<VecDeque<RunCommandOutput>>,
+        commands: Mutex<Vec<RunCommand>>,
+    }
+
+    impl FakeRunner {
+        fn new(exit_codes: impl IntoIterator<Item = i64>) -> Self {
+            Self {
+                outputs: Mutex::new(
+                    exit_codes
+                        .into_iter()
+                        .map(|exit_code| RunCommandOutput {
+                            exit_code,
+                            stdout: String::new(),
+                            stderr: String::new(),
+                        })
+                        .collect(),
+                ),
+                commands: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RunCommandRunner for FakeRunner {
+        async fn run(
+            &self,
+            command: RunCommand,
+            _timeout: Duration,
+        ) -> Result<RunCommandOutput, String> {
+            self.commands.lock().unwrap().push(command);
+            self.outputs
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "unexpected command".into())
+        }
+    }
+
+    #[test]
+    fn local_launch_keeps_windows_paths_with_spaces_as_single_arguments() {
+        let mut context = wisp_store::ExecutionContext::new("local", "Local").unwrap();
+        context.config_json = serde_json::json!({
+            "python_executable": r"C:\Program Files\Python\python.exe"
+        })
+        .to_string();
+        let interpreter = resolve_python_interpreter(&context, Path::new("unused")).unwrap();
+        let command = build_attached_command(
+            &context,
+            RuntimeLanguage::Python,
+            &interpreter,
+            Path::new(r"C:\Program Files\Wisp\kernel_worker.py"),
+            None,
+            Path::new(r"C:\Research Project"),
+        )
+        .unwrap();
+        assert_eq!(
+            command.program,
+            PathBuf::from(r"C:\Program Files\Python\python.exe")
+        );
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(
+            command.args[0],
+            OsString::from(r"C:\Program Files\Wisp\kernel_worker.py")
+        );
+
+        context.config_json = serde_json::json!({
+            "rscript_executable": r"C:\Program Files\R\bin\Rscript.exe"
+        })
+        .to_string();
+        let rscript = resolve_r_interpreter(&context).unwrap();
+        let command = build_attached_command(
+            &context,
+            RuntimeLanguage::R,
+            &rscript,
+            Path::new(r"C:\Program Files\Wisp\kernel_worker.R"),
+            None,
+            Path::new(r"C:\Research Project"),
+        )
+        .unwrap();
+        assert_eq!(command.args[0], OsString::from("--vanilla"));
+        assert_eq!(
+            command.args[1],
+            OsString::from(r"C:\Program Files\Wisp\kernel_worker.R")
+        );
+    }
+
+    #[test]
+    fn write_scope_is_project_local_for_local_and_wsl_but_disabled_for_ssh_and_r() {
+        let local = wisp_store::ExecutionContext::new("local", "Local").unwrap();
+        let wsl = wisp_store::ExecutionContext::new("wsl:Ubuntu", "WSL").unwrap();
+        let ssh = wisp_store::ExecutionContext::new("ssh:gpu", "SSH").unwrap();
+        let project = Path::new(r"C:\Users\me\project one");
+
+        let local_scope = kernel_write_scope(&local, RuntimeLanguage::Python, project).unwrap();
+        assert_eq!(local_scope.root, project.to_string_lossy());
+        assert_eq!(
+            local_scope.skip_dirs,
+            wisp_core::provenance::SNAPSHOT_SKIP_DIRS
+        );
+        assert_eq!(
+            kernel_write_scope(&wsl, RuntimeLanguage::Python, project)
+                .unwrap()
+                .root,
+            "."
+        );
+        assert!(kernel_write_scope(&ssh, RuntimeLanguage::Python, project).is_none());
+        assert!(kernel_write_scope(&wsl, RuntimeLanguage::R, project).is_none());
+    }
+
+    #[test]
+    fn wsl_uses_project_root_while_ssh_preserves_context_workdir() {
+        let mut wsl = wisp_store::ExecutionContext::new("wsl:Ubuntu-24.04", "WSL").unwrap();
+        wsl.config_json = serde_json::json!({
+            "distro": "Ubuntu 24.04",
+            "workdir": "/scratch/project one"
+        })
+        .to_string();
+        wsl.capabilities_json = serde_json::json!({
+            "python_executable": "/opt/conda env/bin/python"
+        })
+        .to_string();
+        let wsl_python = resolve_python_interpreter(&wsl, Path::new("unused")).unwrap();
+        let wsl_command = build_attached_command(
+            &wsl,
+            RuntimeLanguage::Python,
+            &wsl_python,
+            Path::new("unused"),
+            Some("~/.wisp-science/runtime/python.py"),
+            Path::new(r"C:\Users\me\project one"),
+        )
+        .unwrap();
+        let wsl_args = wsl_command
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(wsl_command.program, PathBuf::from("wsl.exe"));
+        assert_eq!(&wsl_args[..2], ["-d", "Ubuntu 24.04"]);
+        let wsl_script = wsl_args.last().unwrap();
+        assert!(
+            wsl_script.contains(r"wslpath -a -u 'C:\Users\me\project one'"),
+            "{wsl_script}"
+        );
+        assert!(wsl_script.contains("cd \"$project_root\""), "{wsl_script}");
+        assert!(!wsl_script.contains("/scratch/project one"), "{wsl_script}");
+
+        let mut ssh = wisp_store::ExecutionContext::new("ssh:gpu-box", "GPU").unwrap();
+        ssh.config_json = serde_json::json!({
+            "user": "alice",
+            "port": 2222,
+            "identity_file": "/home/alice/.ssh/lab key",
+            "python_executable": "/opt/python/bin/python",
+            "workdir": "/scratch/ssh project"
+        })
+        .to_string();
+        let ssh_command = build_attached_command(
+            &ssh,
+            RuntimeLanguage::Python,
+            "/opt/python/bin/python",
+            Path::new("unused"),
+            Some("~/.wisp-science/runtime/python.py"),
+            Path::new("unused"),
+        )
+        .unwrap();
+        let ssh_args = ssh_command
+            .args
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ssh_command.program, PathBuf::from("ssh"));
+        assert!(ssh_args.windows(2).any(|args| args == ["-p", "2222"]));
+        assert!(ssh_args
+            .windows(2)
+            .any(|args| args == ["-i", "/home/alice/.ssh/lab key"]));
+        assert!(ssh_args.contains(&"alice@gpu-box".to_string()));
+        assert!(ssh_args.last().unwrap().contains("/scratch/ssh project"));
+
+        wsl.capabilities_json = serde_json::json!({
+            "rscript_executable": "/opt/R/bin/Rscript",
+            "r_jsonlite": true
+        })
+        .to_string();
+        let rscript = resolve_r_interpreter(&wsl).unwrap();
+        let r_command = build_attached_command(
+            &wsl,
+            RuntimeLanguage::R,
+            &rscript,
+            Path::new("unused"),
+            Some("~/.wisp-science/runtime/r.R"),
+            Path::new(r"C:\Users\me\project one"),
+        )
+        .unwrap();
+        assert!(r_command
+            .args
+            .last()
+            .unwrap()
+            .to_string_lossy()
+            .contains("--vanilla"));
+        assert!(r_command
+            .args
+            .last()
+            .unwrap()
+            .to_string_lossy()
+            .contains("wslpath -a -u"));
+    }
+
+    /// A pixi/conda interpreter cannot find its own shared libraries without
+    /// its prefix on PATH; on Windows that is the difference between a working
+    /// R kernel and an immediate 0xC0000135 exit (#941).
+    #[test]
+    fn local_launches_add_the_interpreter_prefix_to_the_child_path() {
+        let prefix = std::env::temp_dir().join(format!("wisp-launch-env-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(prefix.join("conda-meta")).unwrap();
+        let rscript = prefix
+            .join("lib")
+            .join("R")
+            .join("bin")
+            .join("Rscript")
+            .to_string_lossy()
+            .into_owned();
+        let local = wisp_store::ExecutionContext::new("local", "Local").unwrap();
+        let credentials = vec![("OPENAI_API_KEY".to_string(), "secret".to_string())];
+
+        let r_envs = launch_envs(
+            &local,
+            RuntimeLanguage::R,
+            &rscript,
+            &[],
+            credentials.clone(),
+        );
+        assert_eq!(r_envs.len(), 1, "{r_envs:?}");
+        assert_eq!(r_envs[0].0, "PATH");
+        assert!(r_envs[0].1.contains(&prefix.to_string_lossy().into_owned()));
+
+        // Python keeps its credentials and gains the same prefix PATH.
+        let python_envs = launch_envs(
+            &local,
+            RuntimeLanguage::Python,
+            &prefix.join("python").to_string_lossy(),
+            &[],
+            credentials.clone(),
+        );
+        assert!(python_envs.iter().any(|(name, _)| name == "PATH"));
+        assert!(python_envs.contains(&credentials[0]));
+
+        // A remote context's environment belongs to the remote shell.
+        let mut ssh = wisp_store::ExecutionContext::new("ssh:cpu2", "CPU2").unwrap();
+        ssh.kind = wisp_store::ExecutionContextKind::Ssh;
+        assert!(launch_envs(
+            &ssh,
+            RuntimeLanguage::Python,
+            &rscript,
+            &[],
+            credentials.clone()
+        )
+        .is_empty());
+
+        // An interpreter outside any prefix must not gain a PATH override.
+        let system = launch_envs(
+            &local,
+            RuntimeLanguage::Python,
+            "/usr/bin/python3",
+            &[],
+            credentials.clone(),
+        );
+        assert_eq!(system, credentials);
+        let _ = std::fs::remove_dir_all(&prefix);
+    }
+
+    #[test]
+    fn known_missing_jsonlite_is_an_actionable_r_capability_error() {
+        let mut context = wisp_store::ExecutionContext::new("ssh:r-box", "R").unwrap();
+        context.capabilities_json = serde_json::json!({
+            "rscript_executable": "/usr/bin/Rscript",
+            "r_jsonlite": false
+        })
+        .to_string();
+        let error = resolve_r_interpreter(&context).unwrap_err();
+        assert!(error.to_string().contains("jsonlite"));
+        assert!(error.to_string().contains("install"));
+
+        context.config_json = serde_json::json!({
+            "rscript_executable": "/opt/project-R/bin/Rscript"
+        })
+        .to_string();
+        assert_eq!(
+            resolve_r_interpreter(&context).unwrap(),
+            "/opt/project-R/bin/Rscript"
+        );
+    }
+
+    #[tokio::test]
+    async fn interpreter_config_is_persisted_per_context_and_preserves_transport_fields() {
+        let db = std::env::temp_dir().join(format!(
+            "wisp_runtime_config_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&db).await.unwrap();
+        let mut context = wisp_store::ExecutionContext::new("ssh:cpu2", "CPU2").unwrap();
+        context.config_json = serde_json::json!({
+            "alias": "cpu2",
+            "workdir": "/data/project",
+            "python_path": "/legacy/python",
+            "rscript_path": "/legacy/Rscript"
+        })
+        .to_string();
+        store.upsert_execution_context(&context).await.unwrap();
+
+        let saved = save_interpreter_config(
+            &store,
+            "ssh:cpu2",
+            "/opt/conda/envs/research/bin/python",
+            "/opt/R/4.5/bin/Rscript",
+        )
+        .await
+        .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&saved.config_json).unwrap();
+        assert_eq!(config["alias"], "cpu2");
+        assert_eq!(config["workdir"], "/data/project");
+        assert_eq!(
+            config["python_executable"],
+            "/opt/conda/envs/research/bin/python"
+        );
+        assert_eq!(config["rscript_executable"], "/opt/R/4.5/bin/Rscript");
+        assert!(config.get("python_path").is_none());
+        assert!(config.get("rscript_path").is_none());
+
+        let cleared = save_interpreter_config(&store, "ssh:cpu2", "", "")
+            .await
+            .unwrap();
+        let config: serde_json::Value = serde_json::from_str(&cleared.config_json).unwrap();
+        assert_eq!(config["alias"], "cpu2");
+        assert!(config.get("python_executable").is_none());
+        assert!(config.get("rscript_executable").is_none());
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[test]
+    fn interpreter_config_rejects_line_breaks() {
+        let mut config = serde_json::Map::new();
+        let error = set_interpreter(
+            &mut config,
+            "python_executable",
+            "python_path",
+            "/opt/python\n--version",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("line breaks"));
+    }
+
+    #[tokio::test]
+    async fn remote_deployment_skips_checksum_hits_and_uploads_misses() {
+        let context = wisp_store::ExecutionContext::new("wsl:Ubuntu", "WSL").unwrap();
+        let hit = FakeRunner::new([0]);
+        let path = ensure_remote_worker(&context, RuntimeLanguage::Python, "print('worker')", &hit)
+            .await
+            .unwrap();
+        assert!(path.contains(&format!("python-v{}-", PROTOCOL_VERSION)));
+        assert_eq!(hit.commands.lock().unwrap().len(), 1);
+
+        let miss = FakeRunner::new([1, 0]);
+        ensure_remote_worker(&context, RuntimeLanguage::R, "print('worker')", &miss)
+            .await
+            .unwrap();
+        let commands = miss.commands.lock().unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].script, "check r runtime worker");
+        assert_eq!(commands[1].script, "deploy r runtime worker");
+        assert_eq!(commands[1].stdin.as_deref(), Some("print('worker')"));
+    }
+
+    #[tokio::test]
+    async fn launcher_uses_the_persisted_context_registry() {
+        let db = std::env::temp_dir().join(format!(
+            "wisp_runtime_launcher_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let store = wisp_store::Store::open(&db).await.unwrap();
+        let launcher = TauriRuntimeLauncher::new(
+            store,
+            PathBuf::from("app-data"),
+            PathBuf::from("worker.py"),
+            PathBuf::from("worker.R"),
+            vec![],
+        )
+        .with_runner(Arc::new(FakeRunner::new([])));
+        let result = launcher
+            .launch(
+                &RuntimeKey::python("project", "ssh:missing"),
+                Path::new("project"),
+            )
+            .await;
+        let error = match result {
+            Ok(_) => panic!("missing context unexpectedly launched"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Execution context not found"));
+        let _ = std::fs::remove_file(db);
+    }
+}

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wisp-science</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg" />
+    <script>
+      if (typeof window.__WISP_DEV__ === "undefined") window.__WISP_DEV__ = true;
+      if (new URLSearchParams(location.search).has("mock")) {
+        document.write('<script src="mock-bridge.js"><\/script>');
+      }
+    </script>
+    <link data-trunk rel="css" href="fonts.css" />
+    <link data-trunk rel="css" href="src/styles/base.css" />
+    <link data-trunk rel="css" href="src/styles/sidebar.css" />
+    <link data-trunk rel="css" href="src/styles/chat.css" />
+    <link data-trunk rel="css" href="src/styles/pet.css" />
+    <link data-trunk rel="css" href="src/styles/right-pane.css" />
+    <link data-trunk rel="css" href="src/styles/modals.css" />
+    <link data-trunk rel="css" href="src/styles/settings.css" />
+    <link data-trunk rel="css" href="src/styles/explorer.css" />
+    <link data-trunk rel="css" href="src/styles/overlay.css" />
+    <link data-trunk rel="css" href="src/styles/alignment.css" />
+    <link data-trunk rel="css" href="src/styles/projects.css" />
+    <link data-trunk rel="css" href="src/styles/terminal-dock.css" />
+    <link rel="stylesheet" href="/vendor-runtime/xterm.css" />
+    <link data-trunk rel="copy-file" href="mock-bridge.js" />
+    <link data-trunk rel="copy-file" href="logo.svg" />
+    <link data-trunk rel="copy-file" href="logo-mark.svg" />
+    <link data-trunk rel="copy-dir" href="fonts" />
+    <link data-trunk rel="copy-dir" href="vendor-runtime" />
+    <link data-trunk rel="rust" data-bin="wisp-ui" data-typescript="false" data-wasm-opt="z" />
+  </head>
+  <body></body>
+</html>

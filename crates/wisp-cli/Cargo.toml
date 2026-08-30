@@ -1,0 +1,29 @@
+[package]
+name = "wisp-cli"
+description = "Headless wisp-science agent — terminal smoke binary for the agent loop, tools, and providers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wisp-science"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = "5"
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+async-trait = "0.1"
+wisp-runtime = { workspace = true }
+wisp-mcp = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-core = { workspace = true }
+wisp-skills = { workspace = true }
+wisp-tools = { workspace = true }

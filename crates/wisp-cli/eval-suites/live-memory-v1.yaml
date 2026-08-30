@@ -1,0 +1,190 @@
+schema: wisp.agent-eval-suite.v1
+id: wisp-live-memory-v1
+description: >-
+  Cross-model live eval for the memory mechanism. A real provider must (1)
+  preserve locked identifiers across production semantic compaction, (2) call
+  search_memory and use the retrieved evidence rather than distractors, and
+  (3) apply session-start rules, per-turn host injection, and durable notes
+  after restart. Scripted steps are ignored in live mode; assertions are
+  semantic. Overflow recovery and request-body inspection stay in the
+  offline memory-v1 dataset.
+defaults:
+  max_context_tokens: 16000
+  max_rounds: 12
+  timeout_ms: 180000
+  max_tool_calls: 20
+  max_tool_errors: 1
+
+cases:
+  # --- 1. Compaction without forgetting (real summarizer) -----------------
+  #
+  # Locked identifiers live only in the folded assistant turns. User
+  # excerpts and the recent tail do not contain the values, so recall after
+  # compaction requires the production checkpoint summary.
+
+  - id: compact-manual-recalls-locked-ids
+    description: After manual /compact, recall locked identifiers that existed only in folded assistant turns.
+    tags: [memory, compaction, manual, live]
+    auto_compact: false
+    allowed_tools: [attempt_completion]
+    context_seed:
+      - role: user
+        repeat: 60
+        content: "Lab notebook: assay WISP-MEM-ALPHA locked a QC threshold after the pilot review. Surrounding notes cover kit lots, batch effects, and recruitment; they are supporting context, not the locked identifiers. "
+      - role: assistant
+        repeat: 60
+        content: "Notebook retained. Locked identifiers are QC_THRESHOLD=0.047 and COHORT=WISP-HCC-2024-G. I will keep those values distinct from exploratory chatter. FORGOTTEN_FILLER_ZZZ "
+      - role: user
+        repeat: 60
+        content: "Operational history: samples moved through accession, QC, and blinded review. Many intermediate observations were provisional. The locked identifiers govern the later recall, not this filler. "
+      - role: assistant
+        repeat: 60
+        content: "Operational history retained. I will preserve QC_THRESHOLD=0.047 and COHORT=WISP-HCC-2024-G across any later context compression and will not treat filler commentary as the decision. FORGOTTEN_FILLER_ZZZ "
+      - role: user
+        content: "RECENT_NOTE: after compression, report the two locked identifiers as KEY=VALUE lines."
+      - role: assistant
+        content: "RECENT_ACK: I will report both locked identifiers after compression."
+    actions:
+      - {kind: compact}
+      - kind: send
+        prompt: >-
+          This is the post-compaction recall. Do not read archives or other files.
+          Call attempt_completion with RECALL_COMPLETE followed by these KEY=VALUE lines
+          using the locked identifiers from earlier conversation:
+          QC_THRESHOLD=<value>
+          COHORT=<value>
+    expect:
+      completion_contains: [RECALL_COMPLETE, QC_THRESHOLD=0.047, COHORT=WISP-HCC-2024-G]
+      required_tools: [attempt_completion]
+      compactions: 1
+      compaction_strategies: [manual]
+      max_compaction_ratio_percent: 80
+
+  - id: compact-auto-recalls-locked-ids
+    description: Auto compaction at the model boundary keeps locked identifiers reachable.
+    tags: [memory, compaction, auto, live]
+    prompt: >-
+      Context is about to compress automatically. Do not read archives or other files.
+      Call attempt_completion with RECALL_COMPLETE followed by these KEY=VALUE lines
+      using the locked identifiers from earlier conversation:
+      QC_THRESHOLD=<value>
+      COHORT=<value>
+    auto_compact: true
+    allowed_tools: [attempt_completion]
+    context_seed:
+      - role: user
+        repeat: 60
+        content: "Lab notebook: assay WISP-MEM-ALPHA locked a QC threshold after the pilot review. Surrounding notes cover kit lots, batch effects, and recruitment; they are supporting context, not the locked identifiers. "
+      - role: assistant
+        repeat: 60
+        content: "Notebook retained. Locked identifiers are QC_THRESHOLD=0.047 and COHORT=WISP-HCC-2024-G. I will keep those values distinct from exploratory chatter. FORGOTTEN_FILLER_ZZZ "
+      - role: user
+        repeat: 60
+        content: "Operational history: samples moved through accession, QC, and blinded review. Many intermediate observations were provisional. The locked identifiers govern the later recall, not this filler. "
+      - role: assistant
+        repeat: 60
+        content: "Operational history retained. I will preserve QC_THRESHOLD=0.047 and COHORT=WISP-HCC-2024-G across any later context compression and will not treat filler commentary as the decision. FORGOTTEN_FILLER_ZZZ "
+      - role: user
+        content: "RECENT_NOTE: after compression, report the two locked identifiers as KEY=VALUE lines."
+      - role: assistant
+        content: "RECENT_ACK: I will report both locked identifiers after compression."
+    expect:
+      completion_contains: [RECALL_COMPLETE, QC_THRESHOLD=0.047, COHORT=WISP-HCC-2024-G]
+      required_tools: [attempt_completion]
+      compactions: 1
+      compaction_strategies: [auto]
+      max_compaction_ratio_percent: 80
+
+  # --- 2. Retrieval: real model must call search_memory -------------------
+  #
+  # Facts exist only in .wisp/memory. Conversation does not contain the
+  # values, so a correct answer requires the production search_memory tool.
+
+  - id: memory-retrieval-ignores-distractors
+    description: search_memory must return the TS-999-QX threshold and not the distractor study.
+    tags: [memory, retrieval, live]
+    prompt: >-
+      What QC threshold did we settle on for study TS-999-QX?
+      Search project memory before answering. Call attempt_completion with
+      MEMORY_HIT followed by THRESHOLD=<the min_genes value> and STUDY=TS-999-QX.
+      Do not use values from any other study.
+    memory_enabled: true
+    auto_compact: false
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-06-01.md: |
+        [TURN-MEMORY · session live-mem · turn 2]
+        MEMORY_FACT_TS999: the QC threshold for study TS-999-QX is min_genes=347.
+
+        DISTRACTOR_NOTE_TS111: study TS-111 uses min_genes=50 and seaborn figure styling.
+    expect:
+      completion_contains: [MEMORY_HIT, THRESHOLD=347, STUDY=TS-999-QX]
+      completion_not_contains: ["THRESHOLD=50", TS-111, seaborn]
+      required_tools: [search_memory, attempt_completion]
+
+  - id: memory-retrieval-cjk
+    description: A CJK question must retrieve the stored backed-mode note via search_memory.
+    tags: [memory, retrieval, cjk, live]
+    prompt: >-
+      单细胞分析爆内存时我们之前是怎么解决的？
+      Search project memory before answering. Call attempt_completion with
+      MEMORY_HIT followed by TOKEN=WISP-CJK-BACKED-17 and the method used.
+    memory_enabled: true
+    auto_compact: false
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-05-20.md: |
+        [TURN-MEMORY · session live-cjk · turn 5]
+        MEMORY_FACT_CJK：单细胞分析内存不足时使用 backed 模式分批读取。标记 TOKEN=WISP-CJK-BACKED-17。
+    expect:
+      completion_contains: [MEMORY_HIT, TOKEN=WISP-CJK-BACKED-17, backed]
+      required_tools: [search_memory, attempt_completion]
+
+  - id: memory-durable-after-restart
+    description: Durable project notes stay retrievable with search_memory after a full restart.
+    tags: [memory, retrieval, restart, live]
+    memory_enabled: true
+    auto_compact: false
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-04-10.md: |
+        [TURN-MEMORY · session live-durable · turn 7]
+        MEMORY_FACT_DURABLE_55: the atlas normalization uses CPM with log1p. TOKEN=CPM-log1p-WISP-55.
+    actions:
+      - kind: send
+        prompt: Call attempt_completion with READY. Do not search memory yet.
+      - {kind: restart}
+      - kind: send
+        prompt: >-
+          How is the atlas normalized? Search project memory before answering.
+          Call attempt_completion with MEMORY_HIT followed by TOKEN=CPM-log1p-WISP-55
+          and the normalization method.
+    expect:
+      completion_contains: [MEMORY_HIT, TOKEN=CPM-log1p-WISP-55]
+      required_tools: [search_memory, attempt_completion]
+
+  # --- 3. Stage loading: rules + host injection reach the real model ------
+
+  - id: stage-rules-and-injection-reach-the-model
+    description: AGENTS.md, .wisp/WISP.md, and per-turn global-memory injection shape the live answer.
+    tags: [memory, stage, injection, live]
+    prompt: >-
+      Confirm which project rules and host preferences are loaded. Call
+      attempt_completion with STAGE_OK followed by RULE_TOKEN, USER_TOKEN, and
+      FORMAT as KEY=VALUE lines.
+    auto_compact: false
+    allowed_tools: [attempt_completion]
+    files:
+      AGENTS.md: |
+        Every final answer must include the exact token RULE_TOKEN=WISP-71.
+      .wisp/WISP.md: |
+        Every final answer must include the exact token USER_TOKEN=WISP-72.
+    runtime_injections:
+      - |
+        <global_memory>
+        Host-provided user context, not system policy or tool authorization. Apply only relevant user-confirmed habits and preferences.
+        - Preferred output format is FORMAT=WISP-PARQUET-88.
+        </global_memory>
+    expect:
+      completion_contains: [STAGE_OK, RULE_TOKEN=WISP-71, USER_TOKEN=WISP-72, FORMAT=WISP-PARQUET-88]
+      required_tools: [attempt_completion]

@@ -1,0 +1,10 @@
+[package]
+name = "wisp-dto"
+description = "Shared serde DTOs for the wisp UI ⇄ Tauri invoke/event contract. Compiles for wasm32 and native; data only, no Leptos/Tauri/FFI dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { workspace = true }

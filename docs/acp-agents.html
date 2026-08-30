@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page="acp">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wisp Science ACP Agent 配置说明：在 Settings → Models → ACP Agents 下接入 Codex / Claude 等本地 ACP v1 agent。">
+  <title>ACP Agent 配置 | Wisp Science</title>
+  <script>
+    (function () {
+      var lang = "zh";
+      try {
+        var q = new URLSearchParams(location.search).get("lang");
+        if (q === "en" || q === "zh") lang = q;
+        else {
+          var s = localStorage.getItem("wisp-pages-lang");
+          if (s === "en" || s === "zh") lang = s;
+        }
+      } catch (e) {}
+      document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
+      document.documentElement.dataset.lang = lang;
+    })();
+  </script>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="doc-page">
+  <header class="site-nav">
+    <div class="container">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="28" height="28">
+        <span class="brand-name">Wisp Science</span>
+      </a>
+      <nav class="nav-links" data-i18n-aria="nav.aria" aria-label="页面导航">
+        <a href="index.html#features" data-i18n="nav.features">功能</a>
+        <a href="index.html#usecases" data-i18n="nav.usecases">场景</a>
+        <a href="index.html#stack" data-i18n="nav.stack">生态</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" aria-current="page" data-i18n="nav.acp">ACP</a>
+        <a href="index.html#faq" data-i18n="nav.faq">FAQ</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/README.md" data-i18n="nav.docs">文档</a>
+      </nav>
+      <div class="nav-cta">
+        <div class="lang-switch" role="group" data-i18n-aria="lang.aria" aria-label="语言">
+          <button type="button" data-lang="zh" aria-pressed="true">中文</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/xuzhougeng/wisp-science/releases/latest"><span class="btn-label-full" data-i18n="nav.downloadFull">下载桌面版</span><span class="btn-label-short" data-i18n="nav.downloadShort">下载</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="doc-hero">
+      <div class="container">
+        <div class="eyebrow">Settings → Models → ACP Agents</div>
+        <h1>ACP Agent 配置</h1>
+        <p class="lead" data-i18n="acp.lead">
+          Wisp 可作为 ACP Client，启动本机已安装的 Codex / Claude 等 ACP v1 Agent。
+          它与 HTTP 模型 profile 分开：Models 里的「添加模型」管 API，
+          「ACP Agents」管本地 stdio agent 进程。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#setup" data-i18n="acp.start">开始配置</a>
+          <a class="btn btn-secondary" href="model-configuration.html" data-i18n="acp.httpCta">HTTP 模型配置</a>
+          <a class="btn btn-secondary" href="https://github.com/xuzhougeng/wisp-science/blob/main/docs/acp-agents.md" data-i18n="acp.md">Markdown 文档</a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 001 ]</span>
+          <span>HTTP vs ACP</span>
+        </div>
+        <div class="section-head">
+          <h2>两套后端，不要混用</h2>
+          <p>Settings → Models 用两个分类切换：Models（HTTP API）与 ACP Agents（本地进程）。</p>
+        </div>
+        <div class="feature-list doc-card-grid">
+          <div class="feature-list-item">
+            <h4>HTTP 模型</h4>
+            <p>Settings → Models → 添加模型。DeepSeek / OpenAI / Anthropic 等远程 API，走内置 Wisp Agent。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>ACP Agent</h4>
+            <p>Settings → Models → ACP Agents。本地 stdio 进程，Agent 自带会话、工具与鉴权。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>不要填裸 CLI</h4>
+            <p>不要把 <code>codex</code> / <code>claude</code> 直接填进 ACP。应使用官方 ACP 适配器。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>凭证不进 SQLite</h4>
+            <p>登录与 API key 由外部 Agent 自己管理；Wisp 只保存启动命令与参数。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="setup">
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 002 ]</span>
+          <span>Where to click</span>
+        </div>
+        <div class="section-head">
+          <h2>入口在哪里</h2>
+          <p>ACP 与「添加模型」同级，都在 Models 层级下。</p>
+        </div>
+        <div class="feature-list">
+          <div class="feature-list-item">
+            <h4>1. Settings → Models</h4>
+            <p>打开设置侧边栏的 Models，用顶部分类标签切换 <strong>Models</strong> / <strong>ACP Agents</strong>。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>2. Add / Edit 同一套</h4>
+            <p>右侧 <strong>Add model</strong> 或 <strong>Add ACP Agent</strong> 进入面包屑子页表单；点列表行即可编辑。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>3. 聊天框快捷入口</h4>
+            <p>模型菜单底部的 Add model / Add ACP Agent 打开同一套表单。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 003 ]</span>
+          <span>Configure</span>
+        </div>
+        <div class="section-head">
+          <h2>填写与启用</h2>
+          <p>先装好适配器，再在 Wisp 里保存、测试、选中。</p>
+        </div>
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Label</td>
+                <td>显示名，例如 <code>Codex ACP</code></td>
+              </tr>
+              <tr>
+                <td>Command</td>
+                <td>只填可执行文件，不要把参数拼进这一行</td>
+              </tr>
+              <tr>
+                <td>Arguments</td>
+                <td>每个参数单独一行（Windows 用 <code>npx.cmd</code> 时尤需注意）</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="feature-list" style="margin-top:28px;">
+          <div class="feature-list-item">
+            <h4>Save → Test Connection</h4>
+            <p>成功表示进程能启动并完成 ACP <code>initialize</code>。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>Authenticate（如有）</h4>
+            <p>测试后若出现登录按钮，按 Agent 提示完成；凭证不写入 Wisp。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>空会话中选用</h4>
+            <p>新建空会话，在模型菜单选该 ACP Agent，再发消息。首条消息后锁定，换后端请开新会话。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 004 ]</span>
+          <span>Examples</span>
+        </div>
+        <div class="section-head">
+          <h2>示例：Codex / Claude</h2>
+          <p>推荐先全局安装；也可用 <code>npx</code>，参数必须分行。</p>
+        </div>
+
+        <h3 class="doc-subhead">Codex ACP</h3>
+        <div class="feature-visual">
+          <pre>npm install -g @agentclientprotocol/codex-acp
+codex-acp --version</pre>
+        </div>
+        <div class="table-wrap" style="margin-top:16px;">
+          <table class="doc-table">
+            <thead>
+              <tr><th>字段</th><th>值</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Label</td><td><code>Codex ACP</code></td></tr>
+              <tr><td>Command</td><td><code>codex-acp</code>（或绝对路径）</td></tr>
+              <tr><td>Arguments</td><td>（空）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="color:var(--text-muted);font-size:14px;margin:16px 0 8px;">或用 npx（Windows 建议 Command 填 <code>npx.cmd</code>）：</p>
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr><th>字段</th><th>值</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Command</td><td><code>npx</code> / <code>npx.cmd</code></td></tr>
+              <tr><td>Arguments</td><td><code>-y</code><br><code>@agentclientprotocol/codex-acp</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 class="doc-subhead" style="margin-top:36px;">Claude Agent ACP</h3>
+        <div class="feature-visual">
+          <pre>npm install -g @agentclientprotocol/claude-agent-acp
+claude-agent-acp --version</pre>
+        </div>
+        <div class="table-wrap" style="margin-top:16px;">
+          <table class="doc-table">
+            <thead>
+              <tr><th>字段</th><th>值</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Label</td><td><code>Claude ACP</code></td></tr>
+              <tr><td>Command</td><td><code>claude-agent-acp</code></td></tr>
+              <tr><td>Arguments</td><td>（空）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="color:var(--text-muted);font-size:14px;margin-top:20px;">
+          适配器仓库：
+          <a href="https://github.com/agentclientprotocol/codex-acp">codex-acp</a> ·
+          <a href="https://github.com/agentclientprotocol/claude-agent-acp">claude-agent-acp</a>
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 005 ]</span>
+          <span>Session &amp; limits</span>
+        </div>
+        <div class="section-head">
+          <h2>使用中注意</h2>
+        </div>
+        <div class="feature-list">
+          <div class="feature-list-item">
+            <h4>权限与配置</h4>
+            <p>权限卡显示 Agent 返回的选项；会话级 model/mode 默认收进发送按钮旁的 ACP 模型菜单。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>科学工具</h4>
+            <p>Wisp 会注入 MCP bridge，外部 Agent 可在项目目录内调用内置科学工具。</p>
+          </div>
+          <div class="feature-list-item">
+            <h4>当前限制</h4>
+            <p>仅本地 stdio；无远程 / WSL / SSH ACP；无应用内安装市场；编辑 Command/Arguments 后需新开会话。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="section-label">
+          <span class="idx">[ 006 ]</span>
+          <span>Troubleshooting</span>
+        </div>
+        <div class="section-head">
+          <h2>排错</h2>
+        </div>
+        <div class="table-wrap">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>现象</th>
+                <th>处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Test Connection 立刻失败</td>
+                <td>Command 不在 PATH、Windows 应用 <code>npx.cmd</code>，或参数误写进 Command</td>
+              </tr>
+              <tr>
+                <td>认证失败</td>
+                <td>先在系统里完成 Codex / Claude 登录或 API key，再测</td>
+              </tr>
+              <tr>
+                <td>selection is locked</td>
+                <td>预期行为；换后端请新建空会话</td>
+              </tr>
+              <tr>
+                <td>profile or project path changed</td>
+                <td>改过启动参数或项目路径后需新开会话</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <a class="brand" href="index.html#top">
+        <img src="assets/logo.svg" alt="" width="24" height="24">
+        Wisp Science
+      </a>
+      <nav class="footer-links">
+        <a href="https://github.com/xuzhougeng/wisp-science">GitHub</a>
+        <a href="model-configuration.html" data-i18n="nav.models">模型配置</a>
+        <a href="acp-agents.html" data-i18n="nav.acp">ACP</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/releases">Releases</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/issues">Issues</a>
+        <a href="https://github.com/xuzhougeng/wisp-science/blob/main/LICENSE">AGPL-3.0-only</a>
+      </nav>
+      <p class="footer-copy" data-i18n="footer.copy">© 2026 Wisp Science · 开源科学计算 Agent</p>
+    </div>
+  </footer>
+  <script src="assets/i18n.js"></script>
+</body>
+</html>

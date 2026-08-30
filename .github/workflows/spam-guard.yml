@@ -1,0 +1,108 @@
+name: Spam Guard
+
+# Auto-moderation for water-army spam issues/comments (e.g. the 2026-08-14
+# "刷星" extortion template sprayed at 40+ repos by shell accounts).
+# Three signals, all learned from that incident:
+#   1. shell account: registered < 180 days ago, 0 public repos, 0 followers
+#   2. template content: fake-star accusation keywords / extortion threats
+#   3. cross-repo spray: same author opened issues at >= 3 repos within 24h
+# All three   -> issue: close as not_planned + lock as spam; comment: delete.
+# Only 1+2    -> issue: `possible-spam` label; comment: minimize as spam
+#                (both reversible, left for human review).
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const payload = context.payload;
+            const comment = payload.comment ?? null;
+            const issue = payload.issue ?? null;
+            const author = (comment?.user ?? issue?.user)?.login;
+            const body = (comment?.body ?? issue?.body) ?? "";
+            const assoc = (comment ?? issue)?.author_association ?? "";
+            if (!author) return;
+            if (["OWNER", "MEMBER", "COLLABORATOR"].includes(assoc)) return;
+
+            // Signal 1: shell account.
+            const user = await github.rest.users.getByUsername({ username: author });
+            const ageDays = (Date.now() - new Date(user.data.created_at)) / 864e5;
+            const shellAccount =
+              ageDays < 180 && user.data.public_repos === 0 && user.data.followers === 0;
+
+            // Signal 2: template content (fake-star accusation / extortion threat).
+            const ACCUSE = /(刷星|刷\s*[Ss]tar|[Ss]tar\s*(数据|增长|异常|造假)|购买\s*[Ss]tar|违规人气|虚假繁荣)/;
+            const THREAT = /(举报.{0,12}GitHub|违规.{0,8}清零|项目(关闭|封禁))/;
+            const templateHit = ACCUSE.test(body) || THREAT.test(body);
+            if (!shellAccount || !templateHit) return;
+
+            // Signal 3: cross-repo spray within the last 24h.
+            const since = new Date(Date.now() - 24 * 3600e3).toISOString();
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `author:${author} created:>${since}`,
+              per_page: 100,
+            });
+            const sprayedRepos = new Set(found.data.items.map((i) => i.repository_url)).size;
+            const confirmed = sprayedRepos >= 3;
+            core.info(
+              `${author}: ageDays=${ageDays.toFixed(0)} sprayedRepos=${sprayedRepos} confirmed=${confirmed}`,
+            );
+
+            if (confirmed && issue && !comment) {
+              await github.rest.issues.update({
+                ...context.repo,
+                issue_number: issue.number,
+                state: "closed",
+                state_reason: "not_planned",
+              });
+              await github.rest.issues.lock({
+                ...context.repo,
+                issue_number: issue.number,
+                lock_reason: "spam",
+              });
+              core.notice(`Closed and locked spam issue #${issue.number} by ${author}`);
+            } else if (confirmed && comment) {
+              await github.rest.issues.deleteComment({
+                ...context.repo,
+                comment_id: comment.id,
+              });
+              core.notice(`Deleted spam comment ${comment.id} by ${author}`);
+            } else if (issue && !comment) {
+              // Suspicious but unproven: label for human review, keep it open.
+              for (const name of ["possible-spam"]) {
+                try {
+                  await github.rest.issues.createLabel({
+                    ...context.repo,
+                    name,
+                    color: "e4e669",
+                    description: "Possible water-army spam; needs human review",
+                  });
+                } catch (e) {
+                  if (e.status !== 422) throw e; // 422 = label already exists
+                }
+              }
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: issue.number,
+                labels: ["possible-spam"],
+              });
+              core.notice(`Labeled possible-spam issue #${issue.number} by ${author}`);
+            } else {
+              await github.graphql(
+                `mutation ($id: ID!) {
+                  minimizeComment(input: { subjectId: $id, classifier: SPAM }) { clientMutationId }
+                }`,
+                { id: comment.node_id },
+              );
+              core.notice(`Minimized suspicious comment ${comment.id} by ${author}`);
+            }

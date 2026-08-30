@@ -1,0 +1,315 @@
+schema: wisp.agent-eval-suite.v1
+id: wisp-memory-v1
+description: >-
+  Deterministic headless dataset for the memory mechanism: context compaction
+  under every trigger mode (auto, manual, overflow) with explicit
+  anti-forgetting assertions, project-memory retrieval through search_memory,
+  and memory loading at each lifecycle stage (session-start rules, per-turn
+  ephemeral injection, durable notes across restart).
+defaults:
+  max_context_tokens: 128000
+  max_rounds: 12
+  timeout_ms: 15000
+  max_tool_errors: 0
+
+cases:
+  # --- 1. Compaction modes: compression must not forget early facts -------
+  #
+  # Shared shape: two early facts buried under bulk filler, then two clean
+  # recent turns. After compaction the final provider request must still carry
+  # both facts (via the summary checkpoint), the archive pointer, and the
+  # recent tail, while the bulk assistant filler must be gone. The filler
+  # marker lives only in assistant messages because folded user messages are
+  # excerpted verbatim into the checkpoint by design.
+
+  - id: compact-auto-preserves-early-facts
+    description: Auto compaction at the model boundary keeps early facts reachable.
+    tags: [memory, compaction, auto]
+    prompt: Recall the two early facts after compression.
+    allowed_tools: [attempt_completion]
+    auto_compact: true
+    limits: {max_context_tokens: 10000}
+    context_seed:
+      - {role: user, repeat: 40, content: "EARLY_FACT_ALPHA: the QC threshold is 0.05. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, repeat: 40, content: "EARLY_FACT_BETA: the cohort id is HCC-2024. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, content: "RECENT_NOTE_ONE: keep both early facts available."}
+      - {role: assistant, content: "RECENT_ACK_ONE: both facts stay available."}
+      - {role: user, content: "RECENT_NOTE_TWO: the next answer must cite both facts."}
+      - {role: assistant, content: "RECENT_ACK_TWO: understood."}
+    script:
+      - content: "Compaction checkpoint summary: EARLY_FACT_ALPHA is the QC threshold 0.05. EARLY_FACT_BETA is the cohort id HCC-2024. The user requires both facts to stay available after compression."
+        finish_reason: stop
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "EARLY_FACT_ALPHA=0.05; EARLY_FACT_BETA=HCC-2024"}}
+    expect:
+      compactions: 1
+      compaction_strategies: [auto]
+      max_compaction_ratio_percent: 60
+      completion_contains: ["EARLY_FACT_ALPHA=0.05", "EARLY_FACT_BETA=HCC-2024"]
+      final_request_contains:
+        - "[context summary checkpoint]"
+        - "wisp-history:"
+        - EARLY_FACT_ALPHA
+        - EARLY_FACT_BETA
+        - RECENT_NOTE_TWO
+      final_request_not_contains: [FORGOTTEN_FILLER_ZZZ]
+
+  - id: compact-manual-preserves-early-facts
+    description: Manual /compact keeps early facts reachable in the next request.
+    tags: [memory, compaction, manual]
+    allowed_tools: [attempt_completion]
+    auto_compact: false
+    limits: {max_context_tokens: 10000}
+    context_seed:
+      - {role: user, repeat: 40, content: "EARLY_FACT_ALPHA: the QC threshold is 0.05. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, repeat: 40, content: "EARLY_FACT_BETA: the cohort id is HCC-2024. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, content: "RECENT_NOTE_ONE: keep both early facts available."}
+      - {role: assistant, content: "RECENT_ACK_ONE: both facts stay available."}
+      - {role: user, content: "RECENT_NOTE_TWO: the next answer must cite both facts."}
+      - {role: assistant, content: "RECENT_ACK_TWO: understood."}
+    script:
+      - content: "Compaction checkpoint summary: EARLY_FACT_ALPHA is the QC threshold 0.05. EARLY_FACT_BETA is the cohort id HCC-2024. The user requires both facts to stay available after compression."
+        finish_reason: stop
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "EARLY_FACT_ALPHA=0.05; EARLY_FACT_BETA=HCC-2024"}}
+    actions:
+      - {kind: compact}
+      - {kind: send, prompt: "Recall the two early facts after compression."}
+    expect:
+      compactions: 1
+      compaction_strategies: [manual]
+      max_compaction_ratio_percent: 60
+      completion_contains: ["EARLY_FACT_ALPHA=0.05", "EARLY_FACT_BETA=HCC-2024"]
+      final_request_contains:
+        - "[context summary checkpoint]"
+        - "wisp-history:"
+        - EARLY_FACT_ALPHA
+        - EARLY_FACT_BETA
+        - RECENT_NOTE_TWO
+      final_request_not_contains: [FORGOTTEN_FILLER_ZZZ]
+
+  - id: compact-overflow-recovery-preserves-early-facts
+    description: A provider context-overflow error forces one compaction and a successful retry.
+    tags: [memory, compaction, overflow]
+    prompt: Recall the two early facts after compression.
+    allowed_tools: [attempt_completion]
+    auto_compact: false
+    limits: {max_context_tokens: 10000}
+    context_seed:
+      - {role: user, repeat: 40, content: "EARLY_FACT_ALPHA: the QC threshold is 0.05. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, repeat: 40, content: "EARLY_FACT_BETA: the cohort id is HCC-2024. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+      - {role: assistant, repeat: 40, content: "Noted. FORGOTTEN_FILLER_ZZZ yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}
+      - {role: user, content: "RECENT_NOTE_ONE: keep both early facts available."}
+      - {role: assistant, content: "RECENT_ACK_ONE: both facts stay available."}
+      - {role: user, content: "RECENT_NOTE_TWO: the next answer must cite both facts."}
+      - {role: assistant, content: "RECENT_ACK_TWO: understood."}
+    script:
+      - api_error: {status: 400, body: "maximum context length exceeded"}
+      - content: "Compaction checkpoint summary: EARLY_FACT_ALPHA is the QC threshold 0.05. EARLY_FACT_BETA is the cohort id HCC-2024. The user requires both facts to stay available after compression."
+        finish_reason: stop
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "EARLY_FACT_ALPHA=0.05; EARLY_FACT_BETA=HCC-2024"}}
+    expect:
+      compactions: 1
+      compaction_strategies: [overflow]
+      max_compaction_ratio_percent: 60
+      completion_contains: ["EARLY_FACT_ALPHA=0.05", "EARLY_FACT_BETA=HCC-2024"]
+      final_request_contains:
+        - "[context summary checkpoint]"
+        - "wisp-history:"
+        - EARLY_FACT_ALPHA
+        - EARLY_FACT_BETA
+      final_request_not_contains: [FORGOTTEN_FILLER_ZZZ]
+
+  # --- 2. Retrieval: search_memory over seeded .wisp/memory notes ---------
+
+  - id: memory-retrieval-multi-query
+    description: Complementary exact+concept queries retrieve the right chunk and only that chunk.
+    tags: [memory, retrieval]
+    prompt: What QC threshold did we settle on for study TS-999?
+    memory_enabled: true
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-06-01.md: |
+        [TURN-MEMORY · session demo1 · turn 2]
+        MEMORY_FACT_TS999: the QC threshold for study TS-999 is min_genes=200.
+
+        DISTRACTOR_NOTE_PLOTS: prefer seaborn styling for figures.
+
+        MEMORY_FACT_BACKED: Scanpy h5ad OOM was fixed with backed mode loading.
+    script:
+      - tool_calls:
+          - id: search-1
+            name: search_memory
+            arguments:
+              queries:
+                - {text: "TS-999 QC threshold", kind: exact}
+                - {text: "minimum genes quality control", kind: concept}
+              max_results: 1
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "TS-999 uses min_genes=200"}}
+    expect:
+      completion_contains: ["min_genes=200"]
+      required_tools: [search_memory, attempt_completion]
+      tool_order: [search_memory, attempt_completion]
+      tool_args:
+        - {name: search_memory, pointer: /queries/0/kind, equals: exact}
+        - {name: search_memory, pointer: /queries/1/kind, equals: concept}
+      request_contains: [MEMORY_FACT_TS999, match_reasons]
+      final_request_not_contains: [DISTRACTOR_NOTE_PLOTS]
+
+  - id: memory-retrieval-cjk
+    description: CJK queries match stored notes without whitespace tokenization.
+    tags: [memory, retrieval, cjk]
+    prompt: 单细胞分析爆内存时我们之前是怎么解决的？
+    memory_enabled: true
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-05-20.md: |
+        [TURN-MEMORY · session demo2 · turn 5]
+        MEMORY_FACT_CJK：单细胞分析内存不足时使用 backed 模式分批读取。
+    script:
+      - tool_calls:
+          - id: search-1
+            name: search_memory
+            arguments:
+              queries:
+                - {text: "单细胞爆内存", kind: concept}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "之前用 backed 模式分批读取解决"}}
+    expect:
+      completion_contains: [backed]
+      required_tools: [search_memory, attempt_completion]
+      request_contains: [MEMORY_FACT_CJK]
+
+  - id: memory-retrieval-miss-is-explicit
+    description: A query with no stored evidence returns empty results and an honest answer.
+    tags: [memory, retrieval]
+    prompt: What retention policy did we pick for PROJECT-KRAKEN?
+    memory_enabled: true
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-06-01.md: |
+        [TURN-MEMORY · session demo1 · turn 2]
+        MEMORY_FACT_TS999: the QC threshold for study TS-999 is min_genes=200.
+    script:
+      - tool_calls:
+          - id: search-1
+            name: search_memory
+            arguments:
+              queries:
+                - {text: "PROJECT-KRAKEN retention", kind: exact}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "that memory was not found"}}
+    expect:
+      completion_contains: [not found]
+      required_tools: [search_memory, attempt_completion]
+      request_contains: ["\"results\": []"]
+
+  - id: memory-tool-gated-by-setting
+    description: search_memory is not registered while the memory setting is off.
+    tags: [memory, retrieval, gating]
+    prompt: Try to search memory, then report that memory tools are unavailable.
+    script:
+      - tool_calls:
+          - id: search-1
+            name: search_memory
+            arguments:
+              queries:
+                - {text: "anything", kind: exact}
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "memory tools are unavailable"}}
+    limits: {max_tool_errors: 1}
+    expect:
+      completion_contains: [unavailable]
+      required_tools: [attempt_completion]
+      request_contains: ["unknown tool 'search_memory'"]
+
+  # --- 3. Loading stages: session start, per-turn injection, durable notes -
+
+  - id: stage-session-start-rules-loaded
+    description: AGENTS.md and .wisp/WISP.md are loaded into the seeded system prompt.
+    tags: [memory, stage, session-start]
+    prompt: Confirm which project rules are loaded.
+    allowed_tools: [attempt_completion]
+    files:
+      AGENTS.md: "PROJECT_RULE_MARKER_71: always report units in the final answer.\n"
+      .wisp/WISP.md: "USER_RULE_MARKER_72: prefer concise summaries.\n"
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "loaded PROJECT_RULE_MARKER_71 and USER_RULE_MARKER_72"}}
+    expect:
+      completion_contains: [PROJECT_RULE_MARKER_71, USER_RULE_MARKER_72]
+      request_contains:
+        - "Project Instructions (AGENTS.md)"
+        - PROJECT_RULE_MARKER_71
+        - USER_RULE_MARKER_72
+
+  - id: stage-turn-injection-visible
+    description: Host-injected global memory reaches the provider request for the turn.
+    tags: [memory, stage, injection]
+    prompt: Which output format do I prefer?
+    allowed_tools: [attempt_completion]
+    runtime_injections:
+      - "<global_memory>\n- GLOBAL_MEMORY_MARKER_88: outputs must be written as parquet.\n</global_memory>"
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "parquet, per GLOBAL_MEMORY_MARKER_88"}}
+    expect:
+      completion_contains: [parquet]
+      request_contains: [GLOBAL_MEMORY_MARKER_88, "<global_memory>"]
+
+  - id: stage-injection-ephemeral-after-restart
+    description: Per-turn injections never become durable history across a restart.
+    tags: [memory, stage, injection, restart]
+    allowed_tools: [attempt_completion]
+    runtime_injections:
+      - "<global_memory>\n- GLOBAL_EPHEMERAL_MARKER_93: temporary host context.\n</global_memory>"
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "context acknowledged"}}
+      - tool_calls:
+          - {id: done-2, name: attempt_completion, arguments: {result: "the injected context is no longer present"}}
+    actions:
+      - {kind: send, prompt: "Acknowledge the injected context without repeating it."}
+      - {kind: restart}
+      - {kind: send, prompt: "Is the injected context still present?"}
+    expect:
+      completion_contains: [no longer present]
+      request_contains: [GLOBAL_EPHEMERAL_MARKER_93]
+      final_request_not_contains: [GLOBAL_EPHEMERAL_MARKER_93]
+
+  - id: stage-durable-memory-after-restart
+    description: Durable project notes stay retrievable after a full restart.
+    tags: [memory, stage, retrieval, restart]
+    memory_enabled: true
+    allowed_tools: [search_memory, attempt_completion]
+    files:
+      .wisp/memory/2025-04-10.md: |
+        [TURN-MEMORY · session demo3 · turn 7]
+        MEMORY_FACT_DURABLE_55: the atlas normalization uses CPM with log1p.
+    script:
+      - tool_calls:
+          - {id: done-1, name: attempt_completion, arguments: {result: "ready"}}
+      - tool_calls:
+          - id: search-1
+            name: search_memory
+            arguments:
+              queries:
+                - {text: "atlas normalization", kind: exact}
+      - tool_calls:
+          - {id: done-2, name: attempt_completion, arguments: {result: "CPM with log1p"}}
+    actions:
+      - {kind: send, prompt: "Say ready."}
+      - {kind: restart}
+      - {kind: send, prompt: "How is the atlas normalized?"}
+    expect:
+      completion_contains: [log1p]
+      required_tools: [search_memory, attempt_completion]
+      tool_order: [attempt_completion, search_memory, attempt_completion]
+      request_contains: [MEMORY_FACT_DURABLE_55]

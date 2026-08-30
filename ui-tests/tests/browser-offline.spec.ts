@@ -1,0 +1,196 @@
+import { expect, test, type Page } from "@playwright/test";
+import { tauriMock } from "./mock-tauri";
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(tauriMock);
+});
+
+async function enterApp(page: Page) {
+  await page.goto("/");
+  await page.locator(".proj-card-main").first().click();
+  await expect(page.locator(".sidebar").getByRole("button", { name: "New session" })).toBeVisible();
+}
+
+async function emitTauriEvent(page: Page, event: string, payload: unknown) {
+  await expect.poll(() => page.evaluate((name) =>
+    Boolean((window as any).__tauriListenerReady?.(name)), event
+  )).toBe(true);
+  await page.evaluate(({ name, value }) => {
+    (window as any).__tauriEmit(name, value);
+  }, { name: event, value: payload });
+}
+
+async function lastInvokeArgs(page: Page, cmd: string) {
+  return page.evaluate((name) => {
+    const plain = (value: any): any => {
+      if (value instanceof Map) return Object.fromEntries([...value].map(([k, v]) => [k, plain(v)]));
+      if (Array.isArray(value)) return value.map(plain);
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, plain(v)]));
+      return value;
+    };
+    const calls = ((window as any).__skillInvokeLog ?? []).filter((c: any) => c.cmd === name);
+    return plain(calls.at(-1)?.args ?? null);
+  }, cmd);
+}
+
+async function invokeCount(page: Page, cmd: string) {
+  return page.evaluate((name) =>
+    ((window as any).__skillInvokeLog ?? []).filter((call: any) => call.cmd === name).length,
+  cmd);
+}
+
+async function startLiveRetrievalTurn(page: Page) {
+  await page.locator("#composer-input").fill("latest rustc version");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Hello from mock wisp-science.")).toBeVisible();
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).not.toBeNull();
+  const sessionId = String((await lastInvokeArgs(page, "send_message")).sessionId ?? "");
+  expect(sessionId).not.toBe("");
+  return sessionId;
+}
+
+const disconnectedScan = (sessionId: string) => ({
+  kind: "ToolResult",
+  frame_id: sessionId,
+  name: "web_scan",
+  ok: false,
+  content: "real-browser bridge unavailable: browser extension is not connected. WISP_BROWSER_DISCONNECTED",
+});
+
+const disconnectedSetup = (sessionId: string) => ({
+  kind: "ToolResult",
+  frame_id: sessionId,
+  name: "browser_setup",
+  ok: true,
+  content: JSON.stringify({ status: "disconnected", live_retrieval: false }),
+});
+
+const successfulScan = (sessionId: string) => ({
+  kind: "ToolResult",
+  frame_id: sessionId,
+  name: "web_scan",
+  ok: true,
+  content: JSON.stringify({ tabs: [{ title: "PubMed CLEC12A" }] }),
+});
+
+test("disconnected browser retrieval shows a banner that Escape dismisses without moving focus", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", disconnectedSetup(sessionId));
+
+  const banner = page.getByTestId("browser-offline-banner");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("This answer has no live web results");
+  await expect(banner).toContainText("based only on the model's existing knowledge");
+
+  await page.keyboard.press("Escape");
+  await expect(banner).toBeHidden();
+  await expect(page.locator("#composer-input")).toBeVisible();
+});
+
+test("browser offline banner stays under Settings in the Escape stack and can retry", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", disconnectedScan(sessionId));
+
+  const banner = page.getByTestId("browser-offline-banner");
+  await expect(banner).toBeVisible();
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Back to app" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Back to app" })).toHaveCount(0);
+  await expect(banner).toBeVisible();
+
+  await banner.getByRole("button", { name: "Retry after connecting" }).click();
+  await expect(banner).toBeHidden();
+  await expect.poll(() => lastInvokeArgs(page, "send_message")).toMatchObject({
+    message: "latest rustc version",
+  });
+});
+
+test("a later connected browser_setup clears the offline banner", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", disconnectedSetup(sessionId));
+  const banner = page.getByTestId("browser-offline-banner");
+  await expect(banner).toBeVisible();
+
+  await emitTauriEvent(page, "agent", {
+    kind: "ToolResult",
+    frame_id: sessionId,
+    name: "browser_setup",
+    ok: true,
+    content: JSON.stringify({ status: "connected", live_retrieval: true, connected_tabs: 1 }),
+  });
+  await expect(banner).toHaveCount(0);
+});
+
+test("a live extension recheck clears a stale offline verdict", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+  await page.evaluate(() => {
+    (window as any).__extensionConnected = true;
+  });
+
+  await emitTauriEvent(page, "agent", disconnectedSetup(sessionId));
+
+  await expect.poll(() => invokeCount(page, "extension_connected")).toBe(1);
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+});
+
+test("successful live retrieval survives a stream disconnect error", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", disconnectedSetup(sessionId));
+  await expect(page.getByTestId("browser-offline-banner")).toBeVisible();
+
+  await emitTauriEvent(page, "agent", successfulScan(sessionId));
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+
+  await emitTauriEvent(page, "agent", {
+    kind: "Error",
+    frame_id: sessionId,
+    message: "api: 200 stream error: stream disconnected before completion: stream closed before response.completed",
+  });
+  await expect(page.getByText(/stream disconnected before completion/)).toBeVisible();
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+});
+
+test("a reconnecting extension after a successful scan keeps the turn marked live", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", successfulScan(sessionId));
+  await emitTauriEvent(page, "agent", disconnectedScan(sessionId));
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+});
+
+test("the offline banner does not carry over to the next turn", async ({ page }) => {
+  await enterApp(page);
+  const sessionId = await startLiveRetrievalTurn(page);
+
+  await emitTauriEvent(page, "agent", disconnectedSetup(sessionId));
+  await expect(page.getByTestId("browser-offline-banner")).toBeVisible();
+
+  await emitTauriEvent(page, "agent", {
+    kind: "User",
+    frame_id: sessionId,
+    text: "read this page for me",
+  });
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+});
+
+test("reopening a session does not revive a stale disconnected presentation", async ({ page }) => {
+  await page.goto("/?mockBrowserRestore=1");
+  await page.locator(".proj-card-main").first().click();
+  const session = page.locator('[data-session-id="browser-restore-session"]');
+  await expect(session).toBeVisible();
+  await session.click();
+  await expect(page.getByText("PubMed currently lists live hits for CLEC12A.")).toBeVisible();
+  await expect(page.getByTestId("browser-offline-banner")).toHaveCount(0);
+});

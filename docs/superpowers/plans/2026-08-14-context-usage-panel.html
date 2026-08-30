@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context usage panel — implementation plan</title>
+<style>
+  :root {
+    --bg: #faf9f6; --elev: #ffffff; --sunken: #f3f1ec;
+    --text: #141413; --muted: #5a574e; --faint: #706d65;
+    --border: rgba(60,55,45,.12); --border-strong: #d6d4cc;
+    --clay: #0d9488; --clay-strong: #0f766e; --clay-soft: rgba(13,148,136,.10);
+    --amber: #b06d00; --red: #cf3715;
+    --radius: 16px; --radius-sm: 10px;
+    --shadow-sm: 0 1px 2px rgba(20,20,19,.06), 0 0 0 1px rgba(20,20,19,.04);
+    --sans: "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 var(--sans); }
+  .page { max-width: 860px; margin: 0 auto; padding: 48px 28px 90px; }
+  h1 { font-family: var(--serif); font-size: 30px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 30px; }
+  h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin: 44px 0 6px; letter-spacing: -.01em; }
+  h2 .no { color: var(--clay); margin-right: 8px; }
+  .h2-note { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+  p { margin: 0 0 12px; }
+  code { font: 12.5px var(--mono); background: var(--sunken); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; white-space: nowrap; }
+  .goal {
+    background: var(--elev); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    padding: 20px 24px; box-shadow: var(--shadow-sm); margin: 0 0 8px;
+  }
+  .goal .k { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--clay-strong); display: block; margin-bottom: 6px; }
+  .goal p { margin: 0 0 10px; }
+  .goal p:last-child { margin: 0; }
+  .card {
+    background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 16px 20px 14px; margin: 0 0 12px; box-shadow: var(--shadow-sm);
+  }
+  .card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; display: flex; align-items: baseline; gap: 10px; }
+  .card h3 .id { flex: 0 0 auto; font: 700 11.5px var(--mono); color: var(--clay-strong); background: var(--clay-soft); border-radius: 999px; padding: 2px 9px; }
+  .card p { font-size: 14px; }
+  .why { margin-top: 10px; padding: 9px 13px; background: var(--sunken); border-radius: 8px; font-size: 13px; color: var(--muted); }
+  .why b { color: var(--text); font-weight: 600; }
+  .prob { border-left: 3px solid var(--red); }
+  .pr { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--elev); box-shadow: var(--shadow-sm); margin: 0 0 16px; overflow: hidden; }
+  .pr-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: var(--sunken); border-bottom: 1px solid var(--border); }
+  .pr-head .n { font: 700 12px var(--mono); color: #fff; background: var(--clay); border-radius: 999px; padding: 3px 10px; }
+  .pr-head h3 { margin: 0; font-size: 15.5px; font-weight: 650; }
+  .pr-head .dep { margin-left: auto; font-size: 12px; color: var(--faint); }
+  .pr-body { padding: 14px 20px 16px; font-size: 14px; }
+  .pr-body .row { display: grid; grid-template-columns: 110px 1fr; gap: 12px; padding: 7px 0; border-top: 1px solid var(--border); }
+  .pr-body .row:first-child { border-top: 0; }
+  .pr-body .rk { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding-top: 3px; }
+  .pr-body .rv { min-width: 0; }
+  .pr-body .rv p { margin: 0 0 6px; font-size: 13.5px; }
+  .pr-body .rv p:last-child { margin: 0; }
+  .eng { margin-top: 10px; color: var(--muted); }
+  .eng h2 { color: var(--text); }
+  .eng .card { background: transparent; box-shadow: none; }
+  .eng .card h3 { font-size: 13.5px; color: var(--text); }
+  .eng .card p, .eng .card li { font-size: 13px; }
+  .eng ul { margin: 4px 0 8px; padding-left: 20px; }
+  .eng li { margin: 0 0 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 10px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+  td code { white-space: normal; }
+  .yes { color: var(--clay-strong); font-weight: 650; }
+  .no-x { color: var(--faint); }
+  .footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>Context usage panel — dock, drag, resize</h1>
+<p class="sub">Implementation plan for <code>xuzhougeng/wisp-science</code> · behavior approved via interactive mock and review · 2026-08-14</p>
+
+<h2><span class="no">1</span>Background</h2>
+
+<p>Wisp's chat composer carries a small gauge next to the model picker. Clicking it (or typing <code>/context</code>) opens the <b>context usage panel</b>: a card showing how full the model's context window is, broken into seven colored categories — system prompt, tool definitions, built-in rules, skills guidance, MCP tools, subagents, and conversation — with a stacked bar and expandable rows that reveal the underlying text (the actual system prompt, the actual tool schemas). The panel was introduced in PR #662 (2026-08-04), narrowed to the composer's width in #665, given expandable rows in #680, and its gauge tied to the session's model in #713. That work settled how the panel relates to the <i>composer</i>; how it relates to the <i>conversation</i> was never addressed, and that is what this plan changes.</p>
+
+<div class="card prob">
+<h3>Three problems with the current behavior</h3>
+<p><b>It covers the conversation.</b> The panel is an absolutely-positioned overlay floating above the composer, so opening it hides the newest messages — exactly the content you want visible alongside it, since when context is filling up, the turn responsible is usually the last one in the transcript. Reading both currently means opening and closing the panel repeatedly.</p>
+<p><b>It cannot be moved or resized.</b> Position and size are fixed in CSS. Expanding a row like "System prompt" squeezes thousands of tokens into a small scrolling box that cannot be enlarged.</p>
+<p><b>It swallows the first click.</b> An invisible full-screen layer sits behind the panel to catch outside clicks and dismiss it. Clicking into the message input therefore closes the panel but does <i>not</i> place the cursor — the click dies on the invisible layer, and a second click is needed to start typing. The same is true of every other control in the window while the panel is open.</p>
+</div>
+
+<div class="goal">
+  <span class="k">Overall goal</span>
+  <p>The context usage panel becomes a well-behaved workspace surface instead of an obstruction. It opens <b>docked above the composer</b>, pushing the conversation up so the newest reply stays visible; it can be <b>dragged off its dock</b> into a floating window that stays open while you type; and it can be <b>resized</b>, with its bar and rows reflowing to fit. The invisible click-swallowing layer is removed entirely. Panel content — the seven categories, their accounting, the expandable details — does not change, and nothing in the Rust backend is touched.</p>
+  <span class="k">Overall deliverables</span>
+  <p>Three small PRs (dock → float → resize) plus a polish/QA pass, matching the repo's one-abstraction-per-PR rule. Each PR ships with updated Playwright coverage in <code>ui-tests/tests/ui.spec.ts</code> and documentation updates (<code>docs/ui-design-principles.md</code>, <code>design-qa.md</code>). All changes land in <code>ui/</code> + tests + docs — zero store migrations, zero Tauri command changes.</p>
+</div>
+
+<h2><span class="no">2</span>Specified behavior</h2>
+<p class="h2-note">These are decisions, not options — reviewed and approved against a working interactive mock. Each carries its rationale so the spec stands on its own.</p>
+
+<div class="card">
+  <h3><span class="id">B1</span>Two states: docked and floating</h3>
+  <p>The panel has exactly two states. <b>Docked</b> — its home: sitting in the layout between the conversation and the composer, matching the composer's width, pushing the transcript up rather than covering it. <b>Floating</b> — a free window the user has dragged anywhere on screen. There is no third state and no overlay state; the current overlay behavior is removed, not kept as a fallback.</p>
+  <div class="why"><b>Why:</b> docked preserves the "click the gauge, see it right there" immediacy the panel was designed around; floating exists for the moments you want to study the panel while continuing to work. Docked width stays locked to the composer — that was settled in PR #665 after explicit user feedback, and this plan doesn't reopen it.</div>
+</div>
+
+<div class="card">
+  <h3><span class="id">B2</span>Docked: the conversation moves up, never behind</h3>
+  <p>Opening the gauge inserts the panel into the layout flow. The transcript shrinks to make room and auto-scrolls so the latest message sits against the panel's top edge; closing the panel returns that space and restores the reading position. The docked panel may take at most <b>46% of the window height</b>. Expanding a row scrolls <i>inside</i> the panel rather than growing it, so the conversation never loses more than half the screen.</p>
+  <div class="why"><b>Why the cap:</b> the seven rows plus header fit comfortably under it at every supported window size, while a fully-expanded "Tool definitions" row could otherwise consume the whole viewport. Users who need more room than the cap allows have floating mode (B3) and resize (B5).</div>
+</div>
+
+<div class="card">
+  <h3><span class="id">B3</span>Floating: drag the header to break it free</h3>
+  <p>Dragging the panel's header more than ~8px undocks it: the panel detaches and follows the cursor, landing wherever it's released. While floating it shows two extra affordances — a dock-back button in the header and a resize grip in the bottom-right corner. Double-clicking the header, or pressing the dock button, snaps it back above the composer. Dragging near the dock position does <b>not</b> auto-snap; re-docking is always an explicit action. The panel is always clamped to the window; it can never be dragged or restored to an off-screen position.</p>
+  <div class="why"><b>Why no snap zones:</b> magnetic behavior is easy to trigger accidentally and hard to discover deliberately; two explicit re-dock gestures cover the need. <b>Why the 8px threshold:</b> a plain click on the header must stay inert so misclicks never fling the panel.</div>
+</div>
+
+<div class="card">
+  <h3><span class="id">B4</span>Dismissal depends on the state</h3>
+  <table>
+    <tr><th>Closes the panel…</th><th>Docked</th><th>Floating</th></tr>
+    <tr><td>Clicking into the message input</td><td class="yes">yes</td><td class="no-x">no — stays open while typing</td></tr>
+    <tr><td>Clicking anywhere else outside the panel</td><td class="yes">yes</td><td class="no-x">no</td></tr>
+    <tr><td>Escape (topmost surface only, single press)</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td>The × button / re-clicking the gauge</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+    <tr><td>Switching to another conversation</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+  </table>
+  <p>In every dismissal case the triggering click <b>also lands</b>: clicking the input closes the docked panel <i>and</i> places the cursor; clicking a sidebar session closes it <i>and</i> switches to that session. Nothing swallows clicks anymore — this is a deliberate window-wide behavior change, not a side effect.</p>
+  <div class="why"><b>Why the asymmetry:</b> a docked panel occupies the space you're typing toward, so stepping aside on input focus is the courteous default. A floating panel was <i>deliberately parked</i> somewhere out of the way — dismissing it on typing would defeat the only reason it exists. Both halves of this rule were explicitly confirmed in review.</div>
+</div>
+
+<div class="card">
+  <h3><span class="id">B5</span>Resizable when floating, reflowing content</h3>
+  <p>The corner grip resizes a floating panel between a 320×220px minimum and the window bounds. The stacked bar, category rows, and any expanded detail block reflow to the new size — the bar's segments are proportional widths, and the detail area's height follows the panel instead of being fixed. Docked mode has no manual resize; its size is the composer's width and the content's height under the B2 cap.</p>
+</div>
+
+<div class="card">
+  <h3><span class="id">B6</span>What the panel remembers</h3>
+  <p>Floating position and size persist (locally, per machine — the same mechanism that remembers the composer's custom height). Within a running session, reopening the panel restores its last state: closed while floating means it reopens floating, in the same place. After an app restart the panel opens docked, but a previously saved floating geometry is still there the next time it's undocked. Remembered geometry is clamped to the current window on restore, so a smaller window never resurrects an unreachable panel.</p>
+</div>
+
+<div class="card">
+  <h3><span class="id">B7</span>No state indicator</h3>
+  <p>Nothing labels the panel "docked" or "floating". The geometry is the signal: a docked panel visibly sits in the layout; a floating one visibly doesn't, and carries the dock button and resize grip. An earlier draft used a text chip and it was rejected in review as redundant.</p>
+</div>
+
+<div class="card">
+  <h3><span class="id">B8</span>Small windows follow the same rules</h3>
+  <p>No special-casing below the 960px breakpoint where Wisp's Inspector becomes a drawer: the same clamps simply bind tighter — a floating panel can't exceed the window minus margins, and the docked cap still holds. Floating remains available at every size.</p>
+</div>
+
+<h2><span class="no">3</span>Delivery steps</h2>
+<p class="h2-note">Sequenced so each PR is independently shippable and user-visible. PR 1 alone already resolves two of the three problems in §1.</p>
+
+<div class="pr">
+  <div class="pr-head"><span class="n">PR 1</span><h3>Dock the panel; delete the click-swallowing layer</h3><span class="dep">no dependencies</span></div>
+  <div class="pr-body">
+    <div class="row"><div class="rk">Goal</div><div class="rv"><p>The panel never covers the conversation, and no click is ever swallowed.</p></div></div>
+    <div class="row"><div class="rk">Deliverable</div><div class="rv"><p>Behaviors B1-docked, B2, and the docked column of B4: the panel opens in layout flow with the transcript auto-following, height capped, and every dismissal path working without consuming the triggering click. The backdrop element is deleted outright.</p></div></div>
+    <div class="row"><div class="rk">Done when</div><div class="rv"><p>Playwright proves: latest message visible with the panel open · first click into the input places the caret · a click on another control both dismisses and activates · Escape pressed immediately after opening closes only the panel · scroll position restores on close. Docs: placement paragraph in <code>ui-design-principles.md</code> rewritten; existing overlay-behavior tests updated, with the panel-width-equals-composer assertion retained for the docked state.</p></div></div>
+  </div>
+</div>
+
+<div class="pr">
+  <div class="pr-head"><span class="n">PR 2</span><h3>Drag to float; state-dependent dismissal; memory</h3><span class="dep">depends on PR 1</span></div>
+  <div class="pr-body">
+    <div class="row"><div class="rk">Goal</div><div class="rv"><p>The panel becomes a companion you can park anywhere and keep open while typing.</p></div></div>
+    <div class="row"><div class="rk">Deliverable</div><div class="rv"><p>Behaviors B3, the floating column of B4, B6, and B7: header drag past threshold undocks at the cursor with viewport clamping; floating ignores typing and outside clicks; dock button and double-click re-dock; geometry persisted and restored. A dock icon is added to the shared <code>compose_icon</code> set.</p></div></div>
+    <div class="row"><div class="rk">Done when</div><div class="rv"><p>Playwright proves: drag undocks and position sticks · typing while floating leaves the panel open and keystrokes reach the input · Escape still closes topmost-first when another overlay sits above the panel · reopening restores state and geometry · both re-dock gestures work. Tooltip strings added for both locales.</p></div></div>
+  </div>
+</div>
+
+<div class="pr">
+  <div class="pr-head"><span class="n">PR 3</span><h3>Resize with automatic reflow</h3><span class="dep">depends on PR 2</span></div>
+  <div class="pr-body">
+    <div class="row"><div class="rk">Goal</div><div class="rv"><p>Long details — a 3.4K-token system prompt, dozens of tool schemas — become readable by making the panel bigger.</p></div></div>
+    <div class="row"><div class="rk">Deliverable</div><div class="rv"><p>Behavior B5: corner-grip resize with clamps; bar, rows, and expanded details reflow; the detail block's height derives from the panel's height instead of a fixed 240px; size persists alongside position.</p></div></div>
+    <div class="row"><div class="rk">Done when</div><div class="rv"><p>Playwright proves: resizing changes the rendered box within clamps · the bar still spans its full new width · an expanded detail grows with the panel · minimums hold.</p></div></div>
+  </div>
+</div>
+
+<div class="pr">
+  <div class="pr-head"><span class="n">PR 4</span><h3>Polish and QA pass</h3><span class="dep">independent, last</span></div>
+  <div class="pr-body">
+    <div class="row"><div class="rk">Goal</div><div class="rv"><p>The feature holds up in dark theme, small windows, and both languages — and the repo's design record reflects the new behavior.</p></div></div>
+    <div class="row"><div class="rk">Deliverable</div><div class="rv"><p>Dark-theme and narrow-breakpoint verification (the gap <code>design-qa.md</code> already lists as open), motion on Wisp's <code>--motion-*</code> tokens with <code>prefers-reduced-motion</code> respected, the <code>design-qa.md</code> comparison record refreshed, and the upstream issue (if filed) updated with what shipped.</p></div></div>
+    <div class="row"><div class="rk">Done when</div><div class="rv"><p>Screenshots in both themes at 1100px and below 960px attached to the PR; the full verification suite green on all three OS targets in CI.</p></div></div>
+  </div>
+</div>
+
+<h2><span class="no">4</span>Consciously deferred</h2>
+<p class="h2-note">Considered and set aside — listed so a future reader knows they were choices, not oversights.</p>
+<div class="card">
+  <p style="margin:0">Magnetic snap-back zones near the dock (B3 keeps re-docking explicit) · per-project rather than per-machine geometry memory · manual height adjustment of the docked panel · all-edge resizing · keeping the panel open across conversation switches · disabling floating below 960px. Any of these can be layered on later without disturbing the architecture; none blocks the PRs above.</p>
+</div>
+
+<div class="eng">
+<h2><span class="no">5</span>Engineering appendix</h2>
+<p class="h2-note">Implementation mechanics, for the record and for whoever picks this up.</p>
+
+<div class="card">
+<h3>File map and anchors</h3>
+<table>
+  <tr><th>File</th><th>What changes</th></tr>
+  <tr><td><code>ui/src/main.rs</code></td><td>Panel markup ~12596–12690 (backdrop removed; docked slot added between transcript and composer; floating wrapper at root); Escape-chain entry at 8031 unchanged in position, handler stays state-agnostic; session-switch effect at 576 keeps closing the panel and clearing details but must not clear geometry; gauge trigger at ~12038 unchanged.</td></tr>
+  <tr><td><code>ui/src/styles/chat.css</code></td><td>Lines 1206–1272: <code>.context-usage-backdrop</code> deleted; <code>.context-usage-panel</code> loses its fixed anchoring (<code>inset: auto 0 calc(100% + 10px) 0</code>) in favor of docked-slot and floating variants; <code>.context-usage-detail</code> max-height becomes a variable driven by panel height.</td></tr>
+  <tr><td><code>ui/src/app_support/prefs.rs</code></td><td>New localStorage keys for floating geometry (x, y, w, h) and last state, following the composer-height pattern; restore path clamps to the live viewport.</td></tr>
+  <tr><td><code>ui/src/app_support/messages.rs</code></td><td>New <code>compose_icon</code> kind for "dock back" (Lucide-style 24×24 stroke, per the repo's icon rule — no reuse of an existing kind).</td></tr>
+  <tr><td><code>ui/src/i18n.rs</code></td><td>Keys for dock/undock tooltips and the resize label — En + Zh.</td></tr>
+  <tr><td><code>ui-tests/tests/ui.spec.ts</code></td><td>Width assertion at ~2415 retargeted to the docked state; Escape-after-open assertions preserved; new specs per PR as listed in §3. The mock-tauri bridge needs no new fixtures — all new state is frontend-local.</td></tr>
+  <tr><td><code>docs/ui-design-principles.md</code>, <code>design-qa.md</code></td><td>Placement paragraph and comparison record updated in PR 1 and PR 4.</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>State model</h3>
+<ul>
+  <li>Signals: <code>context_usage_open: bool</code> (exists) plus <code>context_usage_mode: Docked | Floating</code>, <code>context_usage_geom: Option&lt;(f64,f64,f64,f64)&gt;</code>, and <code>context_usage_dragging / _resizing: bool</code> — flat root-owned <code>RwSignal</code>s, matching the codebase's no-store convention.</li>
+  <li>Drag and resize reuse the existing capture pattern: a <code>*_dragging</code> signal conditionally renders the full-screen <code>.drag-overlay</code> (<code>right-pane.css:5</code>) carrying <code>mousemove</code>/<code>mouseup</code>, exactly like the five existing one-axis resizers. Positioning via <code>left/top</code> like the rest of the app (no transform-based positioning, for WebView2/webkit2gtk consistency).</li>
+  <li>Dock-state scroll: on open/close, reuse <code>schedule_chat_follow()</code> — the same call <code>on_composer_resize_end</code> makes — so the transcript keeps its bottom pin without new scroll code.</li>
+  <li>Outside-click dismissal (docked) uses a non-capturing document listener that checks the click target against the panel and never calls <code>preventDefault</code>/<code>stopPropagation</code> — that is what makes B4's "the click also lands" guarantee hold.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Semantics, accessibility, and the Escape stack</h3>
+<ul>
+  <li>Drop <code>aria-modal="true"</code> in both states — it was already inaccurate (focus never moves into the panel). Keep <code>role="dialog"</code> + <code>aria-labelledby</code>; the floating panel is a non-modal dialog.</li>
+  <li>Escape handling stays in the app-level ordered chain (topmost surface first), one entry, both states. Tests press Escape immediately after opening without moving focus first, per the repo's AGENTS.md rule.</li>
+  <li>The drag threshold keeps a plain header click inert; the header's buttons are excluded from the drag surface.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Risks and mitigations</h3>
+<ul>
+  <li><b>Scroll anchoring regressions</b> — this area has history (#670: chat jumps to top during streaming; #849: scroll position across sessions). Mitigation: dock insertion/removal goes through <code>schedule_chat_follow()</code> only; PR 1 adds a test that streams a reply with the panel docked and asserts the viewport stays pinned.</li>
+  <li><b>Animation vs. test flakiness</b> — the panel's enter animation is long enough to make a mid-animation assertion see a transparent panel (observed during mock verification). Tests assert post-animation state via <code>expect.poll</code> on geometry, never fixed sleeps; motion uses Wisp's <code>--motion-*</code> tokens and respects <code>prefers-reduced-motion</code>.</li>
+  <li><b>One-click outside dismissal surprises</b> — B4's "click also lands" applies window-wide. If a specific control turns out to be dangerous to hit through a dismissal (none identified so far), an exemption is a contained change in the dismiss listener, not a layout rework.</li>
+  <li><b>Geometry restored off-screen</b> after a window shrink — the restore path clamps to the live viewport before the floating panel's first paint.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Verification (per AGENTS.md)</h3>
+<ul>
+  <li><code>cargo fmt --all -- --check</code> · <code>cargo test --workspace</code></li>
+  <li><code>cd ui && cargo check --target wasm32-unknown-unknown</code></li>
+  <li><code>cd ui-tests && npm ci && npx playwright test</code></li>
+  <li>Manual smoke on Windows + macOS: drag/resize feel, dark theme, Zh locale, 960px breakpoint.</li>
+</ul>
+<p><b>Out of scope:</b> panel content and bucket accounting (<code>wisp-core</code>), the gauge trigger, ACP single-total sessions (they get the same panel shell with one row — behavior identical), store/migrations, any Tauri command.</p>
+</div>
+</div>
+
+<div class="footer">Sources: git history of PRs #662 / #665 / #680 / #713 · <code>design-qa.md</code> · <code>docs/ui-design-principles.md</code> · AGENTS.md engineering rules · the approved interactive mock (state chip removed in review; dismissal rules B4 confirmed in review).</div>
+
+</div>
+</body>
+</html>

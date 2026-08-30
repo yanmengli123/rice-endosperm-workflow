@@ -1,0 +1,66 @@
+name: Create Release
+
+# Step 1 of a tagged release: publish the GitHub Release title and notes.
+# Platform workflows wait for this release, then attach installers without
+# rewriting the body. Re-running this workflow does not overwrite notes
+# unless overwrite_notes is set.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to create a GitHub release for (e.g. v1.5.0)
+        required: true
+        default: v1.5.0
+      overwrite_notes:
+        description: Replace the existing release title and notes from the notes file
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: create-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite_notes || false }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Read release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          FILE=".github/release-notes/${RELEASE_TAG}.md"
+          echo "notes_file=$FILE" >> "$GITHUB_OUTPUT"
+          bash scripts/github_release_notes.sh "$FILE" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          TITLE: ${{ steps.notes.outputs.title }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if [ "$OVERWRITE" = "true" ]; then
+              gh release edit "$RELEASE_TAG" --title "$TITLE" --notes-file "$NOTES_FILE"
+            else
+              echo "Release $RELEASE_TAG already exists; leaving title and notes unchanged"
+            fi
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE" \
+              --verify-tag
+          fi

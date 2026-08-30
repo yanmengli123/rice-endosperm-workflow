@@ -1,0 +1,39 @@
+[package]
+name = "wisp-mcp"
+description = "Minimal stdio JSON-RPC MCP client; launches vendored bio-tools servers via uv."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+anyhow = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-tools = { workspace = true }
+wisp-paths = { workspace = true }
+reqwest = { workspace = true }
+
+# Only the process-tree regression fixture inspects PIDs directly.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[[test]]
+name = "process_tree_shutdown"
+path = "tests/process_tree_shutdown.rs"
+harness = false
+
+[[test]]
+name = "mcp_transport"
+path = "tests/mcp_transport.rs"
+harness = false

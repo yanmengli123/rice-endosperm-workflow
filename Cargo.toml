@@ -1,0 +1,80 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wisp-llm",
+    "crates/wisp-core",
+    "crates/wisp-tools",
+    "crates/wisp-store",
+    "crates/wisp-skills",
+    "crates/wisp-runtime",
+    "crates/wisp-mcp",
+    "crates/wisp-acp",
+    "crates/wisp-cli",
+    "crates/wisp-paths",
+    "crates/wisp-sync",
+    "crates/wisp-dto",
+    "src-tauri",
+]
+default-members = ["crates/wisp-cli"]
+
+[workspace.package]
+version = "1.8.0"
+edition = "2021"
+rust-version = "1.88"
+license = "AGPL-3.0-only"
+authors = ["wisp-science contributors"]
+repository = "https://github.com/xuzhougeng/wisp-science"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+agent-client-protocol = { version = "=1.2.0", features = ["unstable_auth_methods"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+semver = "1"
+# system-proxy: honor Windows/macOS system proxy settings (clash etc., #77);
+# socks: support socks5:// proxy URLs from env/system config.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "system-proxy", "socks"] }
+futures-util = "0.3"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+glob = "0.3"
+ignore = "0.4"
+walkdir = "2"
+same-file = "1"
+dunce = "1"
+url = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+async-trait = "0.1"
+axum = "0.8.9"
+base64 = "0.22"
+portable-pty = "0.9"
+flate2 = "1"
+hex = "0.4"
+ring = "0.17"
+sha2 = "0.10"
+tar = "0.4"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+keyring = "3"
+wisp-llm = { path = "crates/wisp-llm" }
+wisp-core = { path = "crates/wisp-core" }
+wisp-tools = { path = "crates/wisp-tools" }
+wisp-store = { path = "crates/wisp-store" }
+wisp-skills = { path = "crates/wisp-skills" }
+wisp-runtime = { path = "crates/wisp-runtime" }
+wisp-mcp = { path = "crates/wisp-mcp" }
+wisp-acp = { path = "crates/wisp-acp" }
+wisp-paths = { path = "crates/wisp-paths" }
+wisp-sync = { path = "crates/wisp-sync" }
+wisp-dto = { path = "crates/wisp-dto" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

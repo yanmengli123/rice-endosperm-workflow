@@ -1,0 +1,88 @@
+[package]
+name = "wisp-tauri"
+description = "Tauri v2 desktop shell for wisp-science: commands + agent event stream."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wisp-tauri"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+# model-catalog bake: blocking HTTP + JSON in build.rs (offline snapshot
+# fallback keeps network-free builds working).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools", "tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+semver = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = "5"
+dunce = { workspace = true }
+reqwest = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+base64 = { workspace = true }
+ring = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+pulldown-cmark = { version = "0.12", default-features = false }
+same-file = { workspace = true }
+portable-pty = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# TIFF -> PNG transcode for OOXML preview media plus PNG/WebP Pet atlases.
+image = { version = "0.25", default-features = false, features = ["tiff", "png", "webp"] }
+which = "7"
+walkdir = { workspace = true }
+wisp-core = { workspace = true }
+wisp-llm = { workspace = true }
+wisp-skills = { workspace = true }
+wisp-store = { workspace = true }
+wisp-runtime = { workspace = true }
+wisp-mcp = { workspace = true }
+wisp-acp = { workspace = true }
+wisp-paths = { workspace = true }
+wisp-sync = { workspace = true }
+wisp-tools = { workspace = true }
+# Shared UI ⇄ Tauri invoke/event DTOs. Contract tests still round-trip backend
+# payloads into these types; live commands such as browser tab cleanup emit them.
+wisp-dto = { workspace = true }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+futures-util.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+tauri-winrt-notification = "0.7.3"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mac-notification-sys = "0.6.15"

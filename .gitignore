@@ -1,0 +1,9 @@
+/target
+**/target
+.env
+*.sqlite
+*.sqlite-*
+*.db
+.wisp/
+__pycache__/
+node_modules/

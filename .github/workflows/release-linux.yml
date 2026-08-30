@@ -1,0 +1,121 @@
+name: Linux Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and publish (e.g. v0.1.0)
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/actions/wait-for-release
+          path: _release_ci
+
+      - name: Wait for GitHub release
+        id: release
+        uses: ./_release_ci/.github/actions/wait-for-release
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ui -> target
+          cache-on-failure: true
+
+      - name: Cache Trunk and Tauri CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: tauri-tools-${{ runner.os }}-${{ runner.arch }}-v1
+
+      # wasm-bindgen-cli must stay pinned at 0.2.96 with the repo's wrapper
+      # installed over it: webkit2gtk 2.52.3 on aarch64 cannot expose externref
+      # tables, so the wasm must be built without reference-types. See
+      # scripts/wasm-bindgen-wrapper.sh for the full explanation.
+      - name: Install Trunk, Tauri CLI and pinned wasm-bindgen
+        run: |
+          set -euo pipefail
+          command -v trunk >/dev/null 2>&1 || cargo install trunk --locked
+          command -v cargo-tauri >/dev/null 2>&1 || cargo install tauri-cli --version "^2" --locked
+          if ! command -v wasm-bindgen.real >/dev/null 2>&1 || ! wasm-bindgen.real --version | grep -q '0\.2\.96'; then
+            cargo install wasm-bindgen-cli --version 0.2.96 --locked
+            mv "$HOME/.cargo/bin/wasm-bindgen" "$HOME/.cargo/bin/wasm-bindgen.real"
+          fi
+          ln -sf "$GITHUB_WORKSPACE/scripts/wasm-bindgen-wrapper.sh" "$HOME/.cargo/bin/wasm-bindgen"
+          wasm-bindgen.real --version
+
+      # No updater artifacts on Linux: the macOS workflow owns latest.json.
+      # Pass releaseId so tauri-action uploads assets without rewriting notes.
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          tauriScript: cargo tauri
+          releaseId: ${{ steps.release.outputs.release-id }}
+          uploadUpdaterJson: false
+          args: --target ${{ matrix.target }} --bundles deb,appimage
+
+  verify-assets:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Verify both architectures published deb and AppImage
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" -R "${{ github.repository }}" --json assets --jq '.assets[].name' > assets.txt
+          cat assets.txt
+          debs=$(grep -c '\.deb$' assets.txt || true)
+          appimages=$(grep -c '\.AppImage$' assets.txt || true)
+          if [ "$debs" -lt 2 ] || [ "$appimages" -lt 2 ]; then
+            echo "::error::Expected >=2 .deb and >=2 .AppImage assets, got $debs deb / $appimages AppImage"
+            exit 1
+          fi

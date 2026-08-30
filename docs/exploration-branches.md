@@ -1,0 +1,66 @@
+# Isolated exploration branches
+
+Explorations let you test a scientific direction without changing the project mainline. They are different from ordinary conversation branches: an exploration gets its own persistent workspace and private project records for files, artifacts, runs, decisions, and external resources.
+
+## Start and use an exploration
+
+1. Finish a turn on a native Wisp conversation.
+2. Choose **Start exploration** on the latest completed assistant response, name it, and create it. Ordinary conversation branches do not show this action; start the exploration from main.
+3. Use the exploration normally. Its banner shows the isolation level and provides **View diff**, **Set as mainline**, and **Discard** actions.
+4. Switch between the mainline and sibling explorations either from the exploration group in the sidebar or from the individual exploration cards below the assistant response that created the checkpoint.
+
+The first candidate opens an exploration round. Additional candidates created from the same mainline head reuse the same immutable checkpoint, while each receives an independent workspace and its own checkpoint card. The mainline checkpoint banner and checkpoint cards appear only in that source conversation, not in other conversations in the project. Candidate creation requests may run while sibling explorations are active; simultaneous requests queue through shared-checkpoint initialization instead of failing with a project-busy error. Starting the round freezes its source mainline conversation and all Wisp-managed mainline project writes. Other ordinary conversations may continue as discussion and read-only inspection, but cannot mutate project state. The exploration composer can still use `#` to reference ordinary saved sessions; Reader adds that read-only retrieval to the current turn, while sibling explorations' private sessions remain unavailable. The source mainline cannot accept messages, start another branch, move to another project, or be deleted while the round is unresolved. An exploration candidate cannot start a nested exploration or an ordinary conversation branch. After a candidate is selected, its post-checkpoint transcript and project products are merged into the original mainline; that same mainline may then start a later exploration round normally.
+
+Exactly two operations resolve the round. **Set as mainline** merges one candidate into the original mainline and permanently discards every exploration candidate and isolated leftover. The mainline frame ID, sidebar position, and ordinary conversation branches remain unchanged. **Abandon exploration**, available from the source mainline's right-click menu, keeps the original mainline at its checkpoint and permanently cleans every candidate. In both cases the mainline remains frozen until the backend transaction has completed. Failure or individually discarding a candidate does not resolve the round or release the freeze.
+
+Wisp records an immutable current-head checkpoint only when the user explicitly chooses **Start exploration**. It freezes the workspace snapshot, conversation archive, Artifact heads, Runs, Decisions, and external-resource summary. Ordinary mainline turns no longer create exploration snapshots. Workspace blobs remain content-addressed, and files changed by an external editor before creation are included.
+
+Snapshot discovery follows nested `.gitignore` files and project `.wispignore` files using Git ignore syntax, including `!` negation. Use `.wispignore` for files that should remain in the project but never enter exploration history. Wisp also prunes generated metadata and dependency directories such as `.git`, `.pixi`, `.venv`, `node_modules`, `target`, Python caches, and internal `.wisp` artifact/output directories at any depth; source-oriented dot directories such as `.github` are not excluded automatically.
+
+Strong file capture is bounded to 32 MiB per file, 64 MiB and 4,096 files per checkpoint; files beyond those bounds remain explicit weak references instead of being copied. Scanning and blob capture are cancellable.
+
+Only the latest completed response exposes an enabled **Start exploration** action. Exploration rounds intentionally start at the current head so every candidate has a clear promotion base. ACP conversations cannot be explored, and ACP-bound conversations cannot bypass a project's exploration freeze.
+
+## Ordinary conversation branches
+
+Ordinary conversation branches use a branch icon in the sidebar and also appear directly below the message checkpoint where they were created. The main conversation remains free to continue while every branch develops its own later context.
+
+Right-click a branch and choose **Merge back** when its focused work is ready. Wisp reads only the branch messages created after its checkpoint and drafts a self-contained summary. The user reviews and edits that draft; the approved text is appended to the current end of main as normal readable conversation context. Mainline turns created after the checkpoint are never compared, truncated, replaced, or included in the branch summary.
+
+Conversation branches are one level deep and merge only once. The composer send menu and `/fork` stay on the mainline; a branch cannot create another branch. After merge-back, the branch is frozen as read-only history: it cannot accept new turns, create another branch, rewind, or merge again. On main, the summary is projected as a compact **Merged branch result** card beneath the branch's original checkpoint instead of expanded at the tail. Clicking the card opens the complete Markdown. This is presentation only: the underlying assistant message remains at its real append position as ordinary mainline context that later model turns can read.
+
+Rewind follows that real append position, not the card's visual location. Rewinding main past a merge revokes it and reopens the branch. Rewinding past the branch checkpoint keeps the branch as frozen history, removes its checkpoint attachment, and prevents it from merging into the rewritten mainline.
+
+The summary draft supports **Regenerate** and **Guided generation**. Regenerate creates a fresh draft from only the post-checkpoint branch changes. Guided generation collects user guidance in a separate dialog and creates a new version from three explicit sections: Changes, Current version, and User guidance. A generated version replaces only the pending draft and is never appended to main automatically.
+
+**Delete branch** remains available for an individual branch. A main conversation with one or more conversation branches cannot itself be deleted until those branches are removed. The former **Compare branches**, **Make independent**, and destructive family-convergence actions are no longer part of the conversation-branch workflow.
+
+These actions affect conversation history only. They do not merge, restore, or roll back project files, Runs, Artifacts, or external side effects. Use an isolated exploration when those project-level changes must be compared and promoted together.
+
+## Set an exploration as mainline
+
+**Set as mainline** applies the selected exploration's checkpoint-relative patch to the original mainline. It is available only while the selected exploration has no active runs or unsupported changed references and no live project change overlaps a path selected by that patch.
+
+Review the five diff categories before confirming:
+
+- Files
+- Artifacts
+- Runs
+- Decisions
+- External effects
+
+Wisp keeps the source conversation and managed project state frozen during the round. External editors and processes are outside that lock, so promotion still rescans the project and checks the source conversation, Artifact heads, and project entities. A live change to a file path also changed by the selected exploration blocks promotion; changes to unrelated paths are omitted from the preview, preserved in place, and do not block the patch. On success Wisp appends only the selected exploration's post-checkpoint conversation rows to the original mainline; it does not duplicate the cloned checkpoint prefix or resolve overlapping file conflicts.
+
+If automatic promotion is blocked only by mainline or referenced-file changes, the diff dialog offers **Resolve files manually**. Open both folders, compare them in an editor or diff tool, and copy or merge the wanted files into the live mainline folder. **Finish manual resolution** then preserves the live mainline folder exactly as the user left it and permanently cleans every candidate in the round. This fallback does not bypass the promotion guard and does not transfer exploration-only conversation history, Artifact heads, Runs, research records, external-resource registrations, or external effects. Save any such information separately before finishing. Active turns, terminals, or Runs must still stop before the round can be cleaned.
+
+## Isolation and external effects
+
+Normal project files are copied into the exploration workspace without writable hard links. Ignored paths are absent from the snapshot. Symlinks, devices, sockets, Git metadata, and bounded or large referenced files may be reported as partially isolated. Local weak references are identified by project-relative path, size, and modified time: moving the same reference under an exploration workspace root is not itself a change, while changing a baseline reference's size or modified time still blocks fast-forward promotion. Large local files created by the exploration are checksummed during promotion preflight and travel through the rollback journal when selected. A changed remote or unsupported reference target also blocks promotion.
+
+Local file reads and searches in an exploration are restricted to its isolated workspace. Shell commands, local or WSL background Runs, and local or WSL Python/R cells are rejected if their source names the live mainline workspace by absolute path (including a Windows drive's `/mnt/<drive>/...` WSL alias). Use project-relative paths so execution resolves against the exploration workspace. This boundary is enforced independently of tool approval or Full Permission.
+
+Remote jobs, emails, database writes, MCP/App mutations, and other network-side effects cannot be undone by discarding an exploration. Wisp records these effects and warns before execution, but it does not claim to roll them back.
+
+Individually discarding a candidate removes its private records and validated app-data workspace, but the round remains unresolved and the source mainline stays frozen. Select a candidate or right-click the source mainline and choose **Abandon exploration** to resolve the round. Both paths clean all exploration candidates; selection merges the chosen candidate's deltas into the original mainline, while abandonment leaves the original mainline at the checkpoint.
+
+The Artifacts panel shows logical user workspace paths, not Wisp's internal `.wisp` snapshot storage. Any artifact whose logical path contains a hidden path component is omitted from the product view.
