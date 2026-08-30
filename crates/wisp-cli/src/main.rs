@@ -757,11 +757,27 @@ async fn main() -> Result<()> {
             }
     );
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive("wisp=info".parse()?),
-        )
-        .init();
+    // RPC 模式下 stdout 是协议通道：日志必须走 stderr，且默认关掉 ANSI，
+    // 否则彩色日志行会污染 JSONL 流并导致桌面端解析失败。
+    let rpc_mode = matches!(command, CliCommand::Rpc { .. });
+    if rpc_mode {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("wisp=info".parse()?),
+            )
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("wisp=info".parse()?),
+            )
+            .with_ansi(true)
+            .init();
+    }
 
     if let CliCommand::Eval(options) = &command {
         let live_config = if options.mode == eval::EvalMode::Live {
