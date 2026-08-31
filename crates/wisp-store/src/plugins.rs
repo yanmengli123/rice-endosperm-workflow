@@ -1,6 +1,22 @@
 use super::{PluginInstallation, ProjectPlugin, Store};
 use anyhow::Result;
 
+type PluginInstallationRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+);
+
 impl Store {
     pub async fn replace_plugin_installation(&self, plugin: &PluginInstallation) -> Result<()> {
         let mut tx = self.begin_write().await?;
@@ -224,23 +240,7 @@ impl Store {
     }
 }
 
-fn plugin_installation_from_row(
-    row: (
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        i64,
-        i64,
-    ),
-) -> PluginInstallation {
+fn plugin_installation_from_row(row: PluginInstallationRow) -> PluginInstallation {
     let (
         plugin_id,
         version,

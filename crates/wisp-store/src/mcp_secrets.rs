@@ -324,7 +324,7 @@ mod tests {
             &["TOKEN".into()],
         )
         .unwrap();
-        assert_eq!(kept[0].has_value, true);
+        assert!(kept[0].has_value);
         assert_eq!(
             Secret::get(&env_secret_name(&id, "TOKEN")).unwrap(),
             "secret-value"

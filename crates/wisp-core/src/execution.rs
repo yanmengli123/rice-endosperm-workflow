@@ -350,23 +350,20 @@ impl DelegationExecutor {
                 }
             }
 
-            loop {
-                let Some(index) = pending.iter().position(|step_id| {
-                    let request = &requests[step_id];
-                    let kind = step_kinds
-                        .get(step_id)
-                        .copied()
-                        .unwrap_or(WorkflowTaskKind::Agent);
-                    request.spec.dependencies.iter().all(|dependency| {
-                        responses
-                            .get(dependency)
-                            .is_some_and(|response| response.status == DelegationStatus::Succeeded)
-                    }) && (kind == WorkflowTaskKind::RunActivity
-                        || (running_agents < plan.max_parallel
-                            && (!uses_mutation_lane(request) || running_mutations.is_empty())))
-                }) else {
-                    break;
-                };
+            while let Some(index) = pending.iter().position(|step_id| {
+                let request = &requests[step_id];
+                let kind = step_kinds
+                    .get(step_id)
+                    .copied()
+                    .unwrap_or(WorkflowTaskKind::Agent);
+                request.spec.dependencies.iter().all(|dependency| {
+                    responses
+                        .get(dependency)
+                        .is_some_and(|response| response.status == DelegationStatus::Succeeded)
+                }) && (kind == WorkflowTaskKind::RunActivity
+                    || (running_agents < plan.max_parallel
+                        && (!uses_mutation_lane(request) || running_mutations.is_empty())))
+            }) {
                 let step_id = pending.remove(index);
                 let mut request = requests[&step_id].clone();
                 attach_dependency_results(
@@ -894,7 +891,7 @@ mod tests {
                     budget: None,
                     input: serde_json::json!({}),
                 }],
-                &host,
+                host,
             )
             .unwrap()
             .into_plan()

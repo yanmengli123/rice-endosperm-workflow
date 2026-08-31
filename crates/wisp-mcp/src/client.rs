@@ -163,7 +163,7 @@ enum Transport {
     Stdio {
         stdin: Arc<Mutex<Option<ChildStdin>>>,
         waiters: StdioWaiters,
-        child: Mutex<Option<tokio::process::Child>>,
+        child: Box<Mutex<Option<tokio::process::Child>>>,
         process_tree: ProcessTree,
         closing: AtomicBool,
         terminated: AtomicBool,
@@ -354,7 +354,7 @@ impl McpClient {
             transport: Transport::Stdio {
                 stdin: Arc::new(Mutex::new(Some(stdin))),
                 waiters,
-                child: Mutex::new(Some(child)),
+                child: Box::new(Mutex::new(Some(child))),
                 process_tree,
                 closing: AtomicBool::new(false),
                 terminated: AtomicBool::new(false),
@@ -400,14 +400,25 @@ impl McpClient {
     /// caller-supplied auth headers (e.g. `Authorization`) injected on every
     /// request.
     pub async fn connect_http(url: &str, headers: &[(String, String)]) -> Result<Self> {
-        let http = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             // ponytail: 120s request ceiling so a connected-but-hung host eventually
             // errors instead of blocking a turn forever; raise if a legit HTTP MCP
             // tool call needs longer than this.
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(120));
+        // Loopback MCP servers are a local transport. Never let an ambient
+        // corporate/system proxy intercept them; besides being unreliable,
+        // that could expose locally scoped JSON-RPC headers and payloads.
+        if reqwest::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_owned))
+            .is_some_and(|host| matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1"))
+        {
+            builder = builder.no_proxy();
+        }
+        let http = builder
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .map_err(|error| anyhow!("failed to build HTTP MCP client: {error}"))?;
         let client = Self {
             transport: Transport::Http(HttpTransport {
                 client: http,

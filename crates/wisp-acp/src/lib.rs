@@ -891,7 +891,7 @@ impl BoundedStderr {
             return;
         }
         let mut bytes = self.bytes.lock().expect("stderr buffer poisoned");
-        for byte in line.iter().copied().chain([b'\n']) {
+        for byte in line.iter().copied().chain(*b"\n") {
             if bytes.len() == self.limit {
                 bytes.pop_front();
             }

@@ -2597,6 +2597,7 @@ pub enum SessionStatusKind {
 }
 
 impl SessionStatusKind {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "running" => Self::Running,
@@ -3674,17 +3675,12 @@ pub struct AgentCompletionSettings {
     pub auto_resume: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentApprovalPolicy {
+    #[default]
     ReviewAll,
     AutoSafe,
-}
-
-impl Default for AgentApprovalPolicy {
-    fn default() -> Self {
-        Self::ReviewAll
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

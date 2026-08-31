@@ -434,7 +434,7 @@ mod tests {
             )
             .unwrap();
         }
-        let search = SearchSkillsTool::new(Arc::new(SkillIndex::load(&[root.clone()])));
+        let search = SearchSkillsTool::new(Arc::new(SkillIndex::load(std::slice::from_ref(&root))));
 
         let result = search.search(&json!({ "query": "biomedical literature" }));
         assert!(result.success, "search failed: {}", result.content);
@@ -453,7 +453,7 @@ mod tests {
             vec!["systematic-evidence".into()],
         )]);
         let overridden = SearchSkillsTool::new(Arc::new(
-            SkillIndex::load(&[root.clone()]).with_tag_overrides(&overrides),
+            SkillIndex::load(std::slice::from_ref(&root)).with_tag_overrides(&overrides),
         ));
         let result = overridden.search(&json!({ "query": "systematic-evidence" }));
         let output: serde_json::Value = serde_json::from_str(&result.content).unwrap();
@@ -494,7 +494,7 @@ mod tests {
             )
             .unwrap();
         }
-        let search = SearchSkillsTool::new(Arc::new(SkillIndex::load(&[root.clone()])));
+        let search = SearchSkillsTool::new(Arc::new(SkillIndex::load(std::slice::from_ref(&root))));
 
         let result = search.search(&json!({ "query": "single-cell_QC" }));
         let output: serde_json::Value = serde_json::from_str(&result.content).unwrap();
@@ -530,7 +530,8 @@ mod tests {
             )
             .unwrap();
         }
-        let tool = ListSkillCatalogTool::new(Arc::new(SkillIndex::load(&[root.clone()])));
+        let tool =
+            ListSkillCatalogTool::new(Arc::new(SkillIndex::load(std::slice::from_ref(&root))));
         let first = tool.list(&json!({"limit": 2}));
         let first: serde_json::Value = serde_json::from_str(&first.content).unwrap();
         assert_eq!(first["records"].as_array().unwrap().len(), 2);
@@ -565,7 +566,8 @@ mod tests {
             .unwrap();
         }
         let enabled = std::collections::HashSet::from(["enabled".to_string()]);
-        let filtered = SkillIndex::load(&[root.clone()]).filtered_by_names(Some(&enabled));
+        let filtered =
+            SkillIndex::load(std::slice::from_ref(&root)).filtered_by_names(Some(&enabled));
         let search = SearchSkillsTool::new(Arc::new(filtered));
 
         let result = search.search(&json!({ "query": "*" }));

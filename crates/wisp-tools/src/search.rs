@@ -74,7 +74,7 @@ impl Tool for SearchTool {
             retain_newest(&mut hits, (mtime, path));
         }
         let mut hits = hits.into_iter().map(|Reverse(hit)| hit).collect::<Vec<_>>();
-        hits.sort_by(|a, b| b.0.cmp(&a.0));
+        hits.sort_by_key(|hit| Reverse(hit.0));
         let mut truncated = match_count > hits.len();
         let mut out = String::new();
         for (_, path) in hits {

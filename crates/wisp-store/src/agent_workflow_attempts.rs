@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, Sqlite, Transaction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum AgentWorkflowAttemptStart {
     Started(AgentWorkflowAttempt),
     Busy,

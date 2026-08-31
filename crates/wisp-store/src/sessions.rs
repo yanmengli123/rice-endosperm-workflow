@@ -2447,7 +2447,6 @@ impl Store {
     }
 
     /// Persist an artifact and mint an immutable version for its current location.
-
     pub async fn search_sessions(
         &self,
         project_id: Option<&str>,

@@ -7167,6 +7167,7 @@ dependencies = [
  "wisp-core",
  "wisp-llm",
  "wisp-mcp",
+ "wisp-paths",
  "wisp-runtime",
  "wisp-skills",
  "wisp-tools",

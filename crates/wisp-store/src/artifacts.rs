@@ -675,7 +675,6 @@ impl Store {
 
     /// Root sessions across projects, newest activity first, optionally matched
     /// by their display title. Empty frames never appear in the picker.
-
     pub async fn get_artifact(&self, id: &str) -> Result<Option<(String, String, String, String)>> {
         let row = sqlx::query(
             "SELECT filename, content_type, storage_path, root_frame_id FROM artifacts WHERE id=?",

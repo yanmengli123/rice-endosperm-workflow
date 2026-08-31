@@ -212,6 +212,7 @@ fn merge_wire_content(into: &mut Value, from: &Value) {
 ///   Tool messages *immediately* after it — id-set matching is not enough
 ///   when guidance or a resumed turn lands between call and result;
 /// - no empty-text-only assistant survives.
+///
 /// Consecutive same-role merging happens later on the wire (`normalize_wire`),
 /// because a tool-result flush and a real user turn only become adjacent
 /// after conversion.

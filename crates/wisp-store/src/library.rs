@@ -6,6 +6,8 @@ use sqlx::{Row, SqlitePool};
 use std::path::Path;
 use std::str::FromStr;
 
+type LibraryVersionRow = (String, i64, Option<String>, Option<String>, String, i64);
+
 /// App-global, immutable snapshots. This deliberately uses a separate SQLite
 /// pool from [`crate::Store`], so project/session cascades cannot delete stars.
 #[derive(Clone)]
@@ -342,15 +344,14 @@ impl LibraryStore {
         let Some(item) = item else {
             bail!("library item not found: {item_id}");
         };
-        let head: Option<(String, i64, Option<String>, Option<String>, String, i64)> =
-            sqlx::query_as(
-                "SELECT id, version_number, parent_version_id, language, code, created_at \
+        let head: Option<LibraryVersionRow> = sqlx::query_as(
+            "SELECT id, version_number, parent_version_id, language, code, created_at \
                  FROM library_item_versions WHERE item_id=? \
                  ORDER BY version_number DESC LIMIT 1",
-            )
-            .bind(item_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        )
+        .bind(item_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let current = match head {
             Some((id, version_number, parent_version_id, language, code, created_at)) => {
                 LibraryItemVersion {
@@ -410,7 +411,7 @@ impl LibraryStore {
             return Ok(Vec::new());
         };
         let mut out = vec![original_version(item_id, item)];
-        let rows: Vec<(String, i64, Option<String>, Option<String>, String, i64)> = sqlx::query_as(
+        let rows: Vec<LibraryVersionRow> = sqlx::query_as(
             "SELECT id,version_number,parent_version_id,language,code,created_at \
              FROM library_item_versions WHERE item_id=? ORDER BY version_number ASC",
         )

@@ -1298,9 +1298,9 @@ async fn run_case(
             .as_ref()
             .expect("validated artifacts requirement");
         let target = artifacts.join("failed-workspaces").join(format!(
-            "{}-{}-{}",
-            format!("{}-{}", safe_name(&model), safe_name(&case.id)),
-            repetition,
+            "{}-{}-{repetition}-{}",
+            safe_name(&model),
+            safe_name(&case.id),
             uuid::Uuid::new_v4().simple()
         ));
         Some(workspace.preserve(&target)?.to_string_lossy().into_owned())
@@ -1681,11 +1681,11 @@ fn verify_case(
     }
     if let Some(max_percent) = case.expect.max_compaction_ratio_percent {
         for compaction in &captured.compactions {
-            let ratio = if compaction.before_tokens == 0 {
-                0
-            } else {
-                compaction.after_tokens.saturating_mul(100) / compaction.before_tokens
-            } as u64;
+            let ratio = compaction
+                .after_tokens
+                .saturating_mul(100)
+                .checked_div(compaction.before_tokens)
+                .unwrap_or(0) as u64;
             if ratio > max_percent {
                 failures.push(format!(
                     "compaction ratio was {ratio}% ({} -> {} tokens), above {max_percent}%",

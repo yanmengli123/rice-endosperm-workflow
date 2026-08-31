@@ -7,6 +7,19 @@ use super::Store;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+type RemoteStagingRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    i64,
+    Option<i64>,
+);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteStagingEntry {
     pub id: String,
@@ -105,18 +118,7 @@ impl Store {
              created_at,removed_at FROM remote_staging \
              WHERE project_id=? AND context_id=? AND removed_at IS NULL ORDER BY created_at,id"
         };
-        let rows: Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            String,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-        )> = sqlx::query_as(sql)
+        let rows: Vec<RemoteStagingRow> = sqlx::query_as(sql)
             .bind(project_id)
             .bind(context_id)
             .fetch_all(&self.pool)

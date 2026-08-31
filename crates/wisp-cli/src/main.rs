@@ -37,6 +37,7 @@ Use --mode live for a real configured model. Common options:
 With no command, wisp-science starts the interactive terminal.";
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 enum CliCommand {
     Interactive,
     Run {
@@ -269,9 +270,8 @@ impl Output for CliOutput {
     }
     fn tool_call(&self, name: &str, preview: &str) {
         println!(
-            "\n{}{} {}{} {}{}{}",
+            "\n{}› {}{} {}{}{}",
             self.cyan(),
-            "›",
             name,
             self.reset(),
             self.dim(),
@@ -318,11 +318,11 @@ impl Output for CliOutput {
         max_context: usize,
         _context_usage: wisp_core::ContextUsage,
     ) {
-        let pct = if max_context > 0 {
-            (ctx_tokens * 100 / max_context).min(100)
-        } else {
-            0
-        };
+        let pct = ctx_tokens
+            .saturating_mul(100)
+            .checked_div(max_context)
+            .unwrap_or(0)
+            .min(100);
         let color = if pct < 50 {
             self.green()
         } else if pct < 70 {
@@ -373,11 +373,11 @@ impl Output for CliOutput {
         );
     }
     fn context_warning(&self, ctx_tokens: usize, max_context: usize) {
-        let pct = if max_context > 0 {
-            (ctx_tokens * 100 / max_context).min(100)
-        } else {
-            0
-        };
+        let pct = ctx_tokens
+            .saturating_mul(100)
+            .checked_div(max_context)
+            .unwrap_or(0)
+            .min(100);
         println!(
             "\n{}context is at {pct}% of {}k tokens — run /compact to fold old turns (the full history is archived first, so nothing is lost){}",
             self.yellow(),
@@ -737,6 +737,12 @@ async fn run_prompt(agent: &mut Agent, prompt: &str, output: &dyn Output) -> Res
 #[tokio::main]
 async fn main() -> Result<()> {
     let command = parse_command(std::env::args().skip(1))?;
+    // Headless embedders ship the CLI binary separately from the WISP source
+    // tree. Bind the explicit, supervisor-verified resource root before skill
+    // discovery and Python/R runtime initialization.
+    if let Some(resource_root) = std::env::var_os("WISP_RESOURCE_ROOT") {
+        wisp_paths::set_resource_root(PathBuf::from(resource_root));
+    }
     if command == CliCommand::Help {
         println!("{USAGE}");
         return Ok(());
@@ -759,7 +765,7 @@ async fn main() -> Result<()> {
 
     // RPC 模式下 stdout 是协议通道：日志必须走 stderr，且默认关掉 ANSI，
     // 否则彩色日志行会污染 JSONL 流并导致桌面端解析失败。
-    let rpc_mode = matches!(command, CliCommand::Rpc { .. });
+    let rpc_mode = matches!(command, CliCommand::Rpc);
     if rpc_mode {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -1086,9 +1092,11 @@ mod tests {
 
     #[test]
     fn parses_eval_paths_and_rejects_duplicate_options() {
-        let mut expected = eval::EvalOptions::default();
-        expected.save = Some(PathBuf::from("current.json"));
-        expected.compare = Some(PathBuf::from("baseline.json"));
+        let expected = eval::EvalOptions {
+            save: Some(PathBuf::from("current.json")),
+            compare: Some(PathBuf::from("baseline.json")),
+            ..Default::default()
+        };
         assert_eq!(
             command(&[
                 "eval",
@@ -1112,9 +1120,11 @@ mod tests {
 
     #[test]
     fn parses_live_model_matrix() {
-        let mut expected = eval::EvalOptions::default();
-        expected.mode = eval::EvalMode::Live;
-        expected.models = vec!["model-a".into(), "model-b".into()];
+        let expected = eval::EvalOptions {
+            mode: eval::EvalMode::Live,
+            models: vec!["model-a".into(), "model-b".into()],
+            ..Default::default()
+        };
         assert_eq!(
             command(&["eval", "--mode", "live", "--model", "model-a", "--model", "model-b"])
                 .unwrap(),

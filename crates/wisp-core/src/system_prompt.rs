@@ -598,7 +598,7 @@ mod tests {
             "---\nname: secret-skill\ndescription: SHOULD_NOT_BE_IN_SYSTEM_PROMPT\n---\nbody",
         )
         .unwrap();
-        let skills = SkillIndex::load(&[root.clone()]);
+        let skills = SkillIndex::load(std::slice::from_ref(&root));
 
         let out = SystemPrompt::new(std::path::Path::new("/tmp"), &skills, None).assemble();
         assert!(

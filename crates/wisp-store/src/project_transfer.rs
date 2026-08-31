@@ -1928,7 +1928,7 @@ mod tests {
         )
         .unwrap();
         source
-            .create_agent_workflow_plan(&workflow, &[step.clone()])
+            .create_agent_workflow_plan(&workflow, std::slice::from_ref(&step))
             .await
             .unwrap();
         let workflow = source

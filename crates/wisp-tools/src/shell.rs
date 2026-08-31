@@ -419,7 +419,11 @@ mod tests {
         };
 
         let result = tokio::time::timeout(
-            Duration::from_secs(2),
+            // Windows PowerShell cold start can exceed two seconds on a busy
+            // CI host. The inner 50 ms execution deadline is the behavior
+            // under test; this outer bound only prevents a leaked pipe from
+            // hanging the suite forever.
+            Duration::from_secs(10),
             run_shell(&json!({ "cmd": cmd }), &env, Duration::from_millis(50)),
         )
         .await

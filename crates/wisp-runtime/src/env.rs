@@ -265,7 +265,7 @@ fn rscript_common_install_candidates() -> Vec<PathBuf> {
                 entries
                     .filter_map(Result::ok)
                     .filter(|entry| entry.path().is_dir())
-                    .filter_map(|entry| Some(entry.file_name().into_string().ok()?))
+                    .filter_map(|entry| entry.file_name().into_string().ok())
                     .collect()
             })
             .unwrap_or_default();
@@ -512,9 +512,11 @@ mod tests {
     #[test]
     fn rscript_candidates_are_absolute_and_prefer_standard_locations() {
         let candidates = rscript_common_install_candidates();
-        assert!(!candidates.is_empty());
         assert!(candidates.iter().all(|path| path.is_absolute()));
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(candidates[0], PathBuf::from("/usr/local/bin/Rscript"));
+        {
+            assert!(!candidates.is_empty());
+            assert_eq!(candidates[0], PathBuf::from("/usr/local/bin/Rscript"));
+        }
     }
 }

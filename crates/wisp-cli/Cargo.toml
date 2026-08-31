@@ -27,3 +27,4 @@ wisp-llm = { workspace = true }
 wisp-core = { workspace = true }
 wisp-skills = { workspace = true }
 wisp-tools = { workspace = true }
+wisp-paths = { workspace = true }

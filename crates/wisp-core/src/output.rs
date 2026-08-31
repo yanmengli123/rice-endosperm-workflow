@@ -19,6 +19,7 @@ pub trait Output: Send + Sync {
     fn reasoning(&self, _delta: &str) {}
     fn tool_call(&self, _name: &str, _preview: &str) {}
     fn tool_result(&self, _name: &str, _ok: bool, _content: &str, _duration_ms: u64) {}
+    #[allow(clippy::too_many_arguments)]
     fn usage(
         &self,
         _round: usize,

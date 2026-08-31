@@ -291,6 +291,30 @@ pub const FILTERED_DIRS: &[&str] = &[
     "vendor",
 ];
 
+/// Drop lines that name a filtered directory, then cap to `max_lines`.
+pub fn filter_directory_output(lines: &[String], max_lines: usize) -> Vec<String> {
+    let mut kept: Vec<String> = lines
+        .iter()
+        .filter(|l| {
+            let lower = l.to_ascii_lowercase();
+            !FILTERED_DIRS.iter().any(|d| {
+                lower.contains(&format!("/{d}/"))
+                    || lower.contains(&format!("/{d}\\"))
+                    || lower.contains(&format!("\\{d}\\"))
+                    || lower.trim_start_matches('.').starts_with(d)
+            })
+        })
+        .cloned()
+        .collect();
+    if kept.len() > max_lines {
+        let n = kept.len() - max_lines;
+        kept.truncate(max_lines);
+        kept.push(String::new());
+        kept.push(format!("... truncated {n} lines ..."));
+    }
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,28 +525,4 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&outside).ok();
     }
-}
-
-/// Drop lines that name a filtered directory, then cap to `max_lines`.
-pub fn filter_directory_output(lines: &[String], max_lines: usize) -> Vec<String> {
-    let mut kept: Vec<String> = lines
-        .iter()
-        .filter(|l| {
-            let lower = l.to_ascii_lowercase();
-            !FILTERED_DIRS.iter().any(|d| {
-                lower.contains(&format!("/{d}/"))
-                    || lower.contains(&format!("/{d}\\"))
-                    || lower.contains(&format!("\\{d}\\"))
-                    || lower.trim_start_matches('.').starts_with(d)
-            })
-        })
-        .cloned()
-        .collect();
-    if kept.len() > max_lines {
-        let n = kept.len() - max_lines;
-        kept.truncate(max_lines);
-        kept.push(String::new());
-        kept.push(format!("... truncated {n} lines ..."));
-    }
-    kept
 }

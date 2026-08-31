@@ -3886,7 +3886,7 @@ async fn recent_sessions_detail_respects_limit() {
         let fid = format!("f{i}");
         store.create_frame(&fid, "p", "OPERON", "m").await.unwrap();
         store
-            .append_message(&fid, 1, &Message::user(&format!("msg {i}")))
+            .append_message(&fid, 1, &Message::user(format!("msg {i}")))
             .await
             .unwrap();
     }
@@ -4559,14 +4559,14 @@ async fn remote_staging_ledger_round_trips_and_counts_external_references() {
     assert_eq!(listed.len(), 1);
     assert_eq!(
         store
-            .mark_remote_staging_removed(&[entry.id.clone()])
+            .mark_remote_staging_removed(std::slice::from_ref(&entry.id))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
         store
-            .mark_remote_staging_removed(&[entry.id.clone()])
+            .mark_remote_staging_removed(std::slice::from_ref(&entry.id))
             .await
             .unwrap(),
         0
@@ -5387,7 +5387,7 @@ async fn background_agent_completion_is_delivered_and_resumed_exactly_once() {
     let step =
         AgentWorkflowStep::new("step", "wf", 0, "worker", "worker", "local", "Do work").unwrap();
     store
-        .create_agent_workflow_plan(&workflow, &[step.clone()])
+        .create_agent_workflow_plan(&workflow, std::slice::from_ref(&step))
         .await
         .unwrap();
     assert!(store
@@ -5489,7 +5489,7 @@ async fn background_agent_completion_is_delivered_and_resumed_exactly_once() {
         .is_empty());
     assert_eq!(
         store
-            .finish_agent_workflow_auto_resumes(&[delivery.id.clone()], true, None)
+            .finish_agent_workflow_auto_resumes(std::slice::from_ref(&delivery.id), true, None)
             .await
             .unwrap(),
         1

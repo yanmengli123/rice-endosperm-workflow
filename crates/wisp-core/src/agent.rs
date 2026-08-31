@@ -125,6 +125,7 @@ impl AgentLoopOutcome {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_loop(
     ctx: &mut ContextManager,
     provider: &dyn Provider,
@@ -240,6 +241,7 @@ async fn describe_attachments(
 
 /// Continue a turn after a transient failure — context already has the user
 /// message and any tool results from before the error.
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_loop_continue(
     ctx: &mut ContextManager,
     provider: &dyn Provider,
@@ -265,6 +267,7 @@ pub async fn agent_loop_continue(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn agent_loop_inner(
     ctx: &mut ContextManager,
     provider: &dyn Provider,
@@ -721,6 +724,7 @@ fn iteration_limit_summary_prompt(max_iter: usize) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn summarize_at_iteration_limit(
     ctx: &mut ContextManager,
     provider: &dyn Provider,
@@ -884,8 +888,8 @@ async fn stream_with_retry(
     sink: &mut StreamSinkAdapter<'_>,
     cancel: Option<&AtomicBool>,
 ) -> Result<Completion, LlmError> {
-    let mut last = None;
-    for attempt in 0..=RETRY_DELAYS.len() {
+    let mut attempt = 0;
+    loop {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             return Err(cancelled_stream_error());
         }
@@ -899,12 +903,11 @@ async fn stream_with_retry(
                     return Err(e);
                 }
                 tracing::warn!("LLM stream failed (attempt {}), retrying: {e}", attempt + 1);
-                last = Some(e);
                 retry_delay_or_cancel(Duration::from_millis(RETRY_DELAYS[attempt]), cancel).await?;
+                attempt += 1;
             }
         }
     }
-    Err(last.expect("retry loop always returns or breaks"))
 }
 
 fn cancelled_stream_error() -> LlmError {

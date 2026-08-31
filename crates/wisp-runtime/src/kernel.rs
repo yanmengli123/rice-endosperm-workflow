@@ -380,10 +380,7 @@ fn capture_worker_stderr(stderr: ChildStderr) -> (WorkerStderrTail, JoinHandle<(
     let task = tokio::spawn(async move {
         let mut stderr = stderr;
         let mut chunk = [0_u8; 4096];
-        loop {
-            let Ok(read) = stderr.read(&mut chunk).await else {
-                break;
-            };
+        while let Ok(read) = stderr.read(&mut chunk).await {
             if read == 0 {
                 break;
             }
@@ -784,6 +781,7 @@ mod tests {
         assert!(detail.contains("23"), "{detail}");
     }
 
+    #[cfg(unix)]
     const READY_FRAME: &str =
         r#"{"type":"ready","protocol":1,"language":"python","pid":1,"version":"test"}"#;
 

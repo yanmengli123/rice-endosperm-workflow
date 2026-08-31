@@ -1543,7 +1543,7 @@ mod tests {
     #[test]
     fn remote_directory_runner_parses_banner_and_sorts_directories_first() {
         let identity = test_identity_file();
-        let stdout = b"login banner\nWISP_REMOTE_DIR_V1\0/home/research\0f\012\01700000000\0notes.txt\0d\00\01700001000\0projects\0f\03\01700002000\0a.csv\0".to_vec();
+        let stdout = b"login banner\nWISP_REMOTE_DIR_V1\0/home/research\0f\x0012\x001700000000\0notes.txt\0d\x000\x001700001000\0projects\0f\x003\x001700002000\0a.csv\0".to_vec();
         let mut runner = FakeRemoteRunner::returning(RemoteOutput {
             status: 0,
             stdout,
@@ -1795,7 +1795,7 @@ mod tests {
     #[test]
     fn remote_file_runner_sniffs_text_after_banner() {
         let identity = test_identity_file();
-        let stdout = b"motd noise\nWISP_REMOTE_FILE_TEXT_V1\012\0print('hi')\n".to_vec();
+        let stdout = b"motd noise\nWISP_REMOTE_FILE_TEXT_V1\x0012\0print('hi')\n".to_vec();
         let mut runner = FakeRemoteRunner::returning(RemoteOutput {
             status: 0,
             stdout,
@@ -1844,7 +1844,7 @@ mod tests {
     fn remote_file_runner_returns_binary_as_base64() {
         let identity = test_identity_file();
         // Text protocol sniffs binary and re-fetches full file via V1 bytes path.
-        let head = b"WISP_REMOTE_FILE_TEXT_V1\05\0\x89PNG\0\x01";
+        let head = b"WISP_REMOTE_FILE_TEXT_V1\x005\0\x89PNG\0\x01";
         let full = b"WISP_REMOTE_FILE_V1\0\x89PNG\0\x01";
         let mut runner = FakeRemoteRunner::sequence(vec![
             RemoteOutput {

@@ -159,9 +159,13 @@ fn validate_messages(body: &Value) -> Option<String> {
 }
 
 fn provider_for(url: &str) -> AnthropicProvider {
-    // The mock is loopback; keep ambient proxies out of the way.
-    std::env::set_var("NO_PROXY", "*");
-    AnthropicProvider::new(ProviderConfig::anthropic(url, "sk-test", "claude-test"))
+    // The mock is loopback. Make proxy bypass part of this provider instance
+    // instead of mutating process-wide NO_PROXY: the shared HTTP pool may have
+    // been initialized by another concurrently running test before that env
+    // mutation, which made this deterministic wire test hit an ambient proxy.
+    let mut config = ProviderConfig::anthropic(url, "sk-test", "claude-test");
+    config.proxy = Some("none".into());
+    AnthropicProvider::new(config)
 }
 
 fn tool_call(id: &str, name: &str, args: &str) -> ToolCall {

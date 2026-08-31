@@ -167,7 +167,7 @@ impl ProcessTree {
             } else {
                 self.state.store(TREE_DISARMED, Ordering::SeqCst);
             }
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(windows)]
@@ -182,7 +182,7 @@ impl ProcessTree {
                 }
             }
             self.state.store(FORCE_SENT, Ordering::SeqCst);
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -244,7 +244,7 @@ impl ProcessTree {
             if result == 0 {
                 return Err(io::Error::last_os_error());
             }
-            return Ok(accounting.ActiveProcesses > 0);
+            Ok(accounting.ActiveProcesses > 0)
         }
 
         #[cfg(not(any(unix, windows)))]

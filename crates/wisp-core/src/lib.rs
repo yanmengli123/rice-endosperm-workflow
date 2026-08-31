@@ -90,6 +90,7 @@ pub struct Agent {
 }
 
 impl Agent {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: ProviderConfig,
         skills: Arc<SkillIndex>,
@@ -120,6 +121,7 @@ impl Agent {
     /// project-level session file. Desktop turns load SQLite history afterward
     /// and must fail closed if that load fails — leftover CLI or other-session
     /// messages in the project file must never enter the model context.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_without_session_file(
         cfg: ProviderConfig,
         skills: Arc<SkillIndex>,

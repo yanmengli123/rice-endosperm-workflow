@@ -7,3 +7,4 @@
 .wisp/
 __pycache__/
 node_modules/
+src-tauri/gen/
