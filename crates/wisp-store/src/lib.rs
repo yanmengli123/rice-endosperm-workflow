@@ -183,6 +183,13 @@ impl Store {
         Self::open_with_journal(path, true).await
     }
 
+    /// Close every pooled SQLite connection and wait until file handles are
+    /// released. This is required before deleting or moving a database on
+    /// Windows; dropping the last pool handle is not a synchronous close.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     /// Open a throwaway snapshot/transfer database in the default rollback
     /// journal mode. Switching a database out of WAL needs an exclusive lock
     /// that ignores `busy_timeout` and fails with SQLITE_BUSY immediately, so

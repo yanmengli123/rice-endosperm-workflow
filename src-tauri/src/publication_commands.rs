@@ -782,6 +782,24 @@ mod tests {
         (root, store)
     }
 
+    async fn remove_fixture(root: &std::path::Path) {
+        let mut last_error = None;
+        for _ in 0..40 {
+            match std::fs::remove_dir_all(root) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+            }
+        }
+        panic!(
+            "publication fixture cleanup failed: {}",
+            last_error.unwrap()
+        );
+    }
+
     async fn draft_revision(store: &Store) -> PublicationRevision {
         create_publication(
             store,
@@ -851,7 +869,8 @@ mod tests {
             workspace.lineage[0].exact_version_id.as_deref(),
             Some("artifact-v2")
         );
-        std::fs::remove_dir_all(root).unwrap();
+        store.close().await;
+        remove_fixture(&root).await;
     }
 
     #[tokio::test]
@@ -914,6 +933,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        std::fs::remove_dir_all(root).unwrap();
+        store.close().await;
+        remove_fixture(&root).await;
     }
 }

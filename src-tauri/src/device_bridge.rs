@@ -1132,6 +1132,12 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    fn loopback_client() -> reqwest::Client {
+        // Device bridge traffic must never escape through a corporate/system
+        // proxy. Tests run with the same proxy environment as the desktop app.
+        reqwest::Client::builder().no_proxy().build().unwrap()
+    }
+
     #[derive(Default)]
     struct FakeFocus {
         calls: AtomicUsize,
@@ -1286,7 +1292,7 @@ mod tests {
     #[tokio::test]
     async fn health_is_public_but_state_and_pet_routes_require_the_exact_token() {
         let (bridge, _, token, url, _, store_root) = start_test_bridge().await;
-        let client = reqwest::Client::new();
+        let client = loopback_client();
         let health: Value = client
             .get(format!("{url}/health"))
             .send()
@@ -1364,7 +1370,7 @@ mod tests {
     #[tokio::test]
     async fn action_surface_is_bounded_and_ping_has_no_focus_side_effect() {
         let (bridge, focus, token, url, _, store_root) = start_test_bridge().await;
-        let client = reqwest::Client::new();
+        let client = loopback_client();
         let unknown = client
             .post(format!("{url}/action"))
             .header("X-Wisp-Device-Token", &token)
@@ -1406,7 +1412,7 @@ mod tests {
     #[tokio::test]
     async fn focus_session_rejects_missing_and_orphaned_sessions() {
         let (bridge, focus, token, url, _, store_root) = start_test_bridge().await;
-        let client = reqwest::Client::new();
+        let client = loopback_client();
         for session_id in ["missing", "orphan"] {
             let response = client
                 .post(format!("{url}/action"))
@@ -1463,7 +1469,7 @@ mod tests {
         let (store, store_root) = test_store().await;
         enable_test_pet(&store, &directory).await;
         let (bridge, _, token, url, _) = start_test_bridge_with_store(store).await;
-        let client = reqwest::Client::new();
+        let client = loopback_client();
 
         let manifest: Value = client
             .get(format!("{url}/pet/manifest"))
@@ -1597,7 +1603,7 @@ mod tests {
         let (store, store_root) = test_store().await;
         enable_test_pet(&store, &directory).await;
         let (bridge, _, token, url, _) = start_test_bridge_with_store(store).await;
-        let client = reqwest::Client::new();
+        let client = loopback_client();
         let manifest: Value = client
             .get(format!("{url}/pet/manifest"))
             .header("X-Wisp-Device-Token", &token)
@@ -1642,7 +1648,7 @@ mod tests {
             .start(test_config(port), token.clone(), focus)
             .await
             .unwrap();
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .get(format!("{url}/state"))
             .header("X-Wisp-Device-Token", token)
             .send()
