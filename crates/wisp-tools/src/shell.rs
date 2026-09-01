@@ -72,6 +72,17 @@ fn shell_description() -> String {
     format!("Execute a shell command via {shell} (60s timeout, 1 MiB combined output limit) and return stdout/stderr. Reach for this only when no dedicated tool fits. Write commands for this OS; avoid cross-shell one-liners and use Python or pixi for package-heavy scientific work.")
 }
 
+fn windows_utf8_command(cmd: &str) -> String {
+    // Windows PowerShell 5.1 otherwise writes pipeline/native-process output
+    // using a legacy code page.  Force both console directions and the
+    // pipeline encoding to UTF-8 before running the model-authored command.
+    format!(
+        "$utf8 = New-Object System.Text.UTF8Encoding($false); \
+         [Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; \
+         $OutputEncoding = $utf8; {cmd}"
+    )
+}
+
 async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duration) -> ToolResult {
     let cmd = match arg_str(args, "cmd") {
         Ok(c) => c,
@@ -99,14 +110,18 @@ async fn run_shell(args: &serde_json::Value, env: &dyn ToolEnv, timeout: Duratio
         c.arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-Command")
-            .arg(&cmd);
+            .arg(windows_utf8_command(&cmd));
         c
     } else {
         let mut c = Command::new("sh");
         c.arg("-c").arg(&cmd);
         c
     };
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
     crate::process::hide_console_async(&mut command);
     command.current_dir(env.project_root());
 
@@ -456,5 +471,28 @@ mod tests {
         assert_eq!(decode_stdout_chunk(&mut carry, &bytes[..1], false), "");
         assert_eq!(decode_stdout_chunk(&mut carry, &bytes[1..], false), "文");
         assert!(carry.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_shell_forces_utf8_without_altering_the_user_command() {
+        let user_command = "python -c \"print('水稻胚乳')\"";
+        let wrapped = windows_utf8_command(user_command);
+        assert!(wrapped.contains("[Console]::OutputEncoding = $utf8"));
+        assert!(wrapped.ends_with(user_command));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_shell_round_trips_chinese_as_utf8() {
+        let env = TestEnv(std::env::current_dir().unwrap());
+        let result = run_shell(
+            &json!({ "cmd": "Write-Output '水稻胚乳科研工作流'" }),
+            &env,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(result.success, "{}", result.content);
+        assert_eq!(result.content.trim(), "水稻胚乳科研工作流");
     }
 }
