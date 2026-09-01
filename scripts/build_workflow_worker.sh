@@ -7,14 +7,54 @@
 #   target/release/worker-build.json                     —— 版本/校验和清单
 set -euo pipefail
 
-# Git Bash 默认 PATH 不含 cargo；显式补齐
-for _cargo_dir in "$USERPROFILE/.cargo/bin" "$HOME/.cargo/bin"; do
-  [[ -d "$_cargo_dir" ]] && export PATH="$_cargo_dir:$PATH"
-done
+# WSL/Git Bash can expose both a Linux rustup proxy and the Windows toolchain.
+# Prefer cargo.exe whenever it is available so a Windows release cannot
+# silently build/download the wrong target toolchain.
+WINDOWS_CARGO="$(command -v cargo.exe 2>/dev/null || true)"
+if [[ -z "$WINDOWS_CARGO" ]]; then
+  # Non-login WSL does not always inherit Windows PATH. Resolve the current
+  # Windows profile without assuming a username.
+  for _cmd in /mnt/c/Windows/System32/cmd.exe /c/Windows/System32/cmd.exe; do
+    [[ -x "$_cmd" ]] || continue
+    _win_home="$("$_cmd" /d /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')"
+    if command -v wslpath >/dev/null 2>&1; then
+      _unix_home="$(wslpath -u "$_win_home")"
+    elif command -v cygpath >/dev/null 2>&1; then
+      _unix_home="$(cygpath -u "$_win_home")"
+    else
+      _unix_home=""
+    fi
+    [[ -x "$_unix_home/.cargo/bin/cargo.exe" ]] && WINDOWS_CARGO="$_unix_home/.cargo/bin/cargo.exe"
+    [[ -n "$WINDOWS_CARGO" ]] && break
+  done
+fi
+
+if [[ -n "$WINDOWS_CARGO" ]]; then
+  CARGO_BIN="$WINDOWS_CARGO"
+  # A generic `channel = "stable"` can resolve to the GNU host when the
+  # repository is invoked from WSL/Git Bash.  Tauri's Windows loader and the
+  # release CI use MSVC, so make the release worker target explicit.
+  export RUSTUP_TOOLCHAIN="stable-x86_64-pc-windows-msvc"
+  # WSL passes only variables listed in WSLENV to Windows executables.
+  case ":${WSLENV:-}:" in
+    *:RUSTUP_TOOLCHAIN:*) ;;
+    *) export WSLENV="${WSLENV:+$WSLENV:}RUSTUP_TOOLCHAIN" ;;
+  esac
+elif command -v cargo >/dev/null 2>&1; then
+  CARGO_BIN="cargo"
+else
+  echo "cargo not found on PATH" >&2
+  exit 1
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-cargo build --release -p wisp-cli
+TOOLCHAIN_HOST="$("$CARGO_BIN" -vV | awk -F': ' '/^host:/ { gsub(/\r/, "", $2); print $2; exit }')"
+if [[ "$CARGO_BIN" == *.exe && "$TOOLCHAIN_HOST" != "x86_64-pc-windows-msvc" ]]; then
+  echo "refusing Windows release with non-MSVC Rust host: $TOOLCHAIN_HOST" >&2
+  exit 1
+fi
+"$CARGO_BIN" build --release -p wisp-cli
 
 EXE="$ROOT/target/release/wisp-science.exe"
 EXE_UNIX="$ROOT/target/release/wisp-science"
@@ -35,6 +75,7 @@ cat > "$ROOT/target/release/worker-build.json" <<EOF2
   "binary": "$(basename "$OUT")",
   "sha256": "$SHA256",
   "protocol": "wisp.agent-rpc.v1",
+  "toolchain_host": "$TOOLCHAIN_HOST",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF2

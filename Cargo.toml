@@ -78,3 +78,10 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+# The wisp-tauri test harness links hundreds of crates into one Windows
+# executable. Full debuginfo exceeds MSVC's PDB capacity (LNK1318) before any
+# test can start. Test names and assertion failures remain available; developers
+# can opt into debuginfo for a narrow package when diagnosing a specific test.
+[profile.test]
+debug = 0
